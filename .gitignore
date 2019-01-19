@@ -110,3 +110,5 @@ venv.bak/
 *.mri
 *.webp
 *.png
+!tB.cLwx5xUK.mri
+!tB.cLwx5xUK.webp
