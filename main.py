@@ -73,10 +73,10 @@ class MangaRock:
         print('Get comic of chapter %s......' % chapterId)
         mriList = self.getMRIListByChapter(chapterId)
         for i, mri in enumerate(mriList):
-            print('Process image %d / %d' % (i, len(mriList)))
-            mriFile = os.path.join(folder, 'ch%s_%d.mri' % (chapterId, i))
-            webpFile = os.path.join(folder, 'ch%s_%d.webp' % (chapterId, i))
-            pngFile = os.path.join(folder, 'ch%s_%d.png' % (chapterId, i))
+            print('----------\nProcess image %d / %d' % (i+1, len(mriList)))
+            mriFile = os.path.join(folder, 'ch%s_%d.mri' % (chapterId, i+1))
+            webpFile = os.path.join(folder, 'ch%s_%d.webp' % (chapterId, i+1))
+            pngFile = os.path.join(folder, 'ch%s_%d.png' % (chapterId, i+1))
             self.downloadMRI(mri, mriFile)
             self.mri2webp(mriFile, webpFile)
             if to_png:
@@ -92,7 +92,8 @@ class MangaRock:
 
 if __name__ == '__main__':
     mr = MangaRock()
-    mriList = mr.getMRIListByChapter('100399152')
+    mr.getComicByChapter('100399152')
+    # mriList = mr.getMRIListByChapter('100399152')
 
     # mr.downloadMRI('https://f01.mrcdn.info/file/mrfiles/j/1/a/e/tB.cLwx5xUK.mri') # mriList[2]
     # mr.mri2webp('./tB.cLwx5xUK.mri', './tB.cLwx5xUK.webp')
