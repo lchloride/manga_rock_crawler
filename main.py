@@ -92,7 +92,7 @@ class MangaRock:
 
 if __name__ == '__main__':
     mr = MangaRock()
-    mr.getComicByChapter('100399152')
+    mr.getComicByChapter('100399152', folder='./ch100399152')
     # mriList = mr.getMRIListByChapter('100399152')
 
     # mr.downloadMRI('https://f01.mrcdn.info/file/mrfiles/j/1/a/e/tB.cLwx5xUK.mri') # mriList[2]

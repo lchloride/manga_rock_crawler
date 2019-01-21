@@ -1,22 +1,32 @@
 from appJar import gui
 from PIL import Image, ImageTk
 from datetime import datetime
+import json
+import os
+import sys
 
 
 class MangaViewer:
     def __init__(self):
         self.conf = {'width': 900, 'height': 740,
-                     'manga_width': 480, 'manga_height': 640,
+                     'manga_max_width': 540, 'manga_max_height': 660,
                      'manga_bg': 'black', 'info_width': 200,
                      }
         self.app = gui("FRAME DEMO", "%dx%d" % (self.conf['width'], self.conf['height']))
-
+        self.mangaPath = './'
+        self.nameMsgTitle = []
         self.__setLayout()
 
     def readImage(self, filepath):
         conf = self.conf
         oriImg = Image.open(filepath)
-        image0 = oriImg.resize((conf['manga_width'], conf['manga_height']), Image.ANTIALIAS)
+        print(oriImg.size)
+        ratio = conf['manga_max_height'] / oriImg.size[1] if oriImg.size[1] > oriImg.size[0] else \
+            conf['manga_max_width'] / oriImg.size[0]
+        ratio = 1 if oriImg.size[0] < conf['manga_max_width'] and \
+            oriImg.size[1] < conf['manga_max_height'] else ratio
+        newSize = (int(oriImg.size[0] * ratio), int(oriImg.size[1] * ratio))
+        image0 = oriImg.resize(newSize, Image.ANTIALIAS)
         img = ImageTk.PhotoImage(image0)
         return img
 
@@ -26,19 +36,40 @@ class MangaViewer:
 
         app.setBg("yellow")
 
-        tools = ["ABOUT", "REFRESH", "OPEN", "CLOSE", "SAVE",
-                 "NEW", "SETTINGS", "PRINT", "SEARCH", "UNDO",
-                 "REDO", "PREFERENCES", "HOME", "HELP", "CALENDAR",
-                 "WEB", "OFF"]
+        tools = ["OPEN", "DOWNLOAD", "REFRESH", "MD-PREVIOUS", "MD-NEXT", "MD-REPEAT",
+                 "ZOOM-IN", "ZOOM-OUT",
+                 "ARROW-1-LEFT", "ARROW-1-RIGHT", "ARROW-1-UP",
+                 "ARROW-1-DOWN", "SETTINGS", "HELP", "ABOUT", "OFF"]
+        funcs = [self.onOpenToolPressed, self.__defaultCallback, self.__defaultCallback,
+                 self.__defaultCallback, self.__defaultCallback, self.__defaultCallback,
+                 self.__defaultCallback, self.__defaultCallback, self.__defaultCallback,
+                 self.__defaultCallback, self.__defaultCallback, self.__defaultCallback,
+                 self.__defaultCallback, self.__defaultCallback, self.__defaultCallback,
+                 self.app.stop]
 
-        app.addToolbar(tools, self.__defaultCallback, findIcon=True)
+        app.addToolbar(tools, funcs, findIcon=True)
+
+        # app.setToolbarButtonDisabled("OPEN")
+        app.setToolbarButtonDisabled("DOWNLOAD")
+        app.setToolbarButtonDisabled("REFRESH")
+        app.setToolbarButtonDisabled("MD-PREVIOUS")
+        app.setToolbarButtonDisabled("MD-NEXT")
+        app.setToolbarButtonDisabled("ZOOM-IN")
+        app.setToolbarButtonDisabled("ZOOM-OUT")
+        app.setToolbarButtonDisabled("ARROW-1-LEFT")
+        app.setToolbarButtonDisabled("ARROW-1-RIGHT")
+        app.setToolbarButtonDisabled("ARROW-1-UP")
+        app.setToolbarButtonDisabled("ARROW-1-DOWN")
+        app.setToolbarButtonDisabled("SETTINGS")
+        app.setToolbarButtonDisabled("HELP")
+        app.setToolbarButtonDisabled("ABOUT")
 
         app.startFrame("LEFT", row=0, column=0, rowspan=1, colspan=2)
         app.setBg(conf['manga_bg'])
-        app.setSticky("NEW")
-        app.setStretch("COLUMN")
+        app.setSticky("NEWS")
+        app.setStretch("BOTH")
 
-        app.addImageData('Manga', self.readImage('./ch100399152_3.png'), fmt='PhotoImage')
+        app.addImageData('Manga', self.readImage('./1.png'), fmt='PhotoImage')
         app.stopFrame()
 
         app.startFrame("RIGHT", row=0, column=2, rowspan=1, colspan=1)
@@ -48,20 +79,21 @@ class MangaViewer:
         app.startFrame('RR', row=0, column=1)
         app.setSticky("NW")
         app.setPadX(5)
-        app.setFont(12)
+        app.setFont(13)
 
         app.addLabel('InfoL', 'Information')
         app.getLabelWidget("InfoL").config(font=("Comic Sans", "14", "bold"))
 
         # Name list
-        aliasList = ["Kanojo, Okarishimasu", "I'd like to Borrow a Girlfriend", "여친, 빌리겠습니다",
-                 "彼女、お借りします", "女朋友、借我一下"]
+        aliasList = ["N/A"]
         app.addLabel('NameL', 'Name:', row=1, column=0)
+        aliasStr = ''
         for i, alias in enumerate(aliasList):
-            nameId = 'NameMsg'+str(i)
-            app.addMessage(nameId, alias, row=1+i, column=1)
-            app.setMessageWidth(nameId, conf['info_width'])
-        rowCnt = 1 + len(aliasList)
+            aliasStr += alias + '\n'
+        aliasStr = aliasStr[:-1]
+        app.addMessage('NameMsg', aliasStr, row=1, column=1)
+        app.setMessageWidth('NameMsg', conf['info_width'])
+        rowCnt = 2
 
         # Author
         author = "Reiji Miyajima"
@@ -120,16 +152,42 @@ class MangaViewer:
         app.stopFrame()
         app.stopFrame()
 
+        # State Bar
+        currPage = 2
+        updatedAt = 1547130632
+        updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
+
         app.addStatusbar(fields=3)
-        app.setStatusbar("Line: 20", 0)
-        app.setStatusbar("Column: 4", 1)
-        app.setStatusbar("Mode: Edit", 2)
+        app.setStatusbar("Chapter: %d" % currChapter, 0)
+        app.setStatusbar("Page: %d" % currPage, 1)
+        app.setStatusbar("Updated at: %s" % updatedAtStr, 2)
 
     def __defaultCallback(self, name):
         print(name)
 
     def go(self):
         self.app.go()
+
+    def onOpenToolPressed(self, btn):
+        self.mangaPath = self.app.directoryBox('Select Manga Directory')
+        self.loadMangaDir()
+
+    def updateNameMsg(self, aliasList):
+        aliasStr = ''
+        for i, alias in enumerate(aliasList):
+            aliasStr += alias.strip() + '\n'
+        aliasStr = aliasStr[:-1]
+        self.app.setMessage('NameMsg', aliasStr)
+
+
+    def loadMangaDir(self):
+        self.loadMangaMeta()
+
+    def loadMangaMeta(self):
+        with open(os.path.join(self.mangaPath, 'meta.json'), 'r') as f:
+            metaObj = json.load(f)
+
+        self.updateNameMsg(metaObj['alias'])
 
 if __name__ == '__main__':
     mv = MangaViewer()
