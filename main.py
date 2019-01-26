@@ -4,8 +4,9 @@ import os
 
 
 class MangaRock:
-    def __init__(self):
+    def __init__(self, writer=None):
         self.magicNum = 0x65
+        self.writer = writer
 
     def mri2webp(self, mriFile, webpFile=None):
         print('MRI file to webp image...')
@@ -70,10 +71,10 @@ class MangaRock:
         return mriList
 
     def getComicByChapter(self, chapterId, folder='./', to_png=True, delete_tempfile=True):
-        print('Get comic of chapter %s......' % chapterId)
+        self.write('Get comic of chapter %s......' % chapterId)
         mriList = self.getMRIListByChapter(chapterId)
         for i, mri in enumerate(mriList):
-            print('----------\nProcess image %d / %d' % (i+1, len(mriList)))
+            self.write('----------\nProcess image %d / %d' % (i+1, len(mriList)))
             mriFile = os.path.join(folder, 'ch%s_%d.mri' % (chapterId, i+1))
             webpFile = os.path.join(folder, 'ch%s_%d.webp' % (chapterId, i+1))
             pngFile = os.path.join(folder, 'ch%s_%d.png' % (chapterId, i+1))
@@ -82,19 +83,40 @@ class MangaRock:
             if to_png:
                 self.webp2png(webpFile, pngFile)
             if delete_tempfile:
-                print('Remove temporary files...')
+                self.write('Remove temporary files...')
                 os.remove(mriFile)
                 if to_png:
                     os.remove(webpFile)
-        print('Get comic of chapter %s finished.' % chapterId)
+        self.write('Get comic of chapter %s finished.' % chapterId)
 
+    def getSeriesInfo(self, seriesId):
+        r = rs.get('https://api.mangarockhd.com/query/web401/info?oid=mrs-serie-%s&last=0&country=Japan'
+                   % seriesId)
+        obj = json.loads(r.text)
+        if obj['code'] != 0:
+            return None
+        else:
+            obj['data']['mrs_series'] = str(seriesId)
+            return obj['data']
 
+    def getChapterInfo(self, seriesInfo, chapterId):
+        for i, info in enumerate(seriesInfo['chapters']):
+            if info['oid'] == 'mrs-chapter-'+str(chapterId):
+                seriesInfo['current_chapter'] = str(chapterId)
+                break
+
+    def write(self, content):
+        if self.writer is None:
+            print(content)
+        else:
+            self.writer.writeDownloadMsg(content)
 
 if __name__ == '__main__':
     mr = MangaRock()
-    mr.getComicByChapter('100399152', folder='./ch100399152')
+    # mr.getComicByChapter('100399152', folder='./ch100399152')
     # mriList = mr.getMRIListByChapter('100399152')
 
     # mr.downloadMRI('https://f01.mrcdn.info/file/mrfiles/j/1/a/e/tB.cLwx5xUK.mri') # mriList[2]
     # mr.mri2webp('./tB.cLwx5xUK.mri', './tB.cLwx5xUK.webp')
     # mr.webp2png('./tB.cLwx5xUK.webp')
+    print(mr.getSeriesInfo('61792'))

@@ -3,7 +3,9 @@ from PIL import Image, ImageTk
 from datetime import datetime
 import json
 import os
+import requests as rs
 import sys
+from main import MangaRock
 
 
 class MangaViewer:
@@ -12,17 +14,28 @@ class MangaViewer:
                      'manga_max_width': 560, 'manga_max_height': 660,
                      'manga_bg': 'black', 'info_width': 200,
                      }
-        self.app = gui("FRAME DEMO", "%dx%d" % (self.conf['width'], self.conf['height']))
+        self.app = gui("MangaRock Viewer", "%dx%d" % (self.conf['width'], self.conf['height']))
         self.mangaPath = './'
         self.nameMsgTitle = []
         self.mangaMeta = {}
         self.currPage = -1  # starting from 0
+        self.downloadParam = {}
         self.mangaList = []
+        self.leftOffset = 0
+        self.upOffset = 0
+        self.zoomLevel = 0
+        self.isDownloading = False
         self.__setLayout()
 
     def readImage(self, filepath):
         conf = self.conf
-        oriImg = Image.open(filepath)
+        oriImg0 = Image.open(filepath)
+        box = (max(0, self.zoomLevel*25-self.leftOffset), max(0, self.zoomLevel*25-self.upOffset),
+               min(oriImg0.size[0], oriImg0.size[0]-self.leftOffset-self.zoomLevel*25),
+               min(oriImg0.size[1], oriImg0.size[1]-self.upOffset-self.zoomLevel*25))
+        oriImg = oriImg0.crop(box)
+        # print(box, self.zoomLevel*25, self.leftOffset)
+        # oriImg = oriImg0
         ratio = conf['manga_max_height'] / oriImg.size[1] if oriImg.size[1] > oriImg.size[0] else \
             conf['manga_max_width'] / oriImg.size[0]
         ratio = 1 if oriImg.size[0] < conf['manga_max_width'] and \
@@ -39,24 +52,24 @@ class MangaViewer:
         app.setBg(conf['manga_bg'])
         app.setFg('lightgray')
 
-        tools = ["OPEN", "DOWNLOAD", "REFRESH", "MD-PREVIOUS", "MD-NEXT", "MD-REPEAT",
+        tools = ["DOWNLOAD", "OPEN", "REFRESH", "MD-PREVIOUS", "MD-NEXT", "MD-REPEAT",
                  "ZOOM-IN", "ZOOM-OUT",
                  "ARROW-1-LEFT", "ARROW-1-RIGHT", "ARROW-1-UP",
                  "ARROW-1-DOWN", "SETTINGS", "HELP", "ABOUT", "OFF"]
-        funcs = [self.onOpenToolPressed, self.__defaultCallback, self.__defaultCallback,
+        funcs = [self.openDownloadWindow, self.onOpenToolPressed, self.__defaultCallback,
                  self.loadPreviousManga, self.loadNextManga, self.jumpMangaPage,
-                 self.__defaultCallback, self.__defaultCallback, self.__defaultCallback,
-                 self.__defaultCallback, self.__defaultCallback, self.__defaultCallback,
+                 self.onZoomInBtnPressed, self.onZoomOutBtnPressed, self.onMoveLeftBtnPressed,
+                 self.onMoveRightBtnPressed, self.__defaultCallback, self.__defaultCallback,
                  self.__defaultCallback, self.openHelpWindow, self.openAboutWindow,
                  self.app.stop]
 
         app.addToolbar(tools, funcs, findIcon=True)
 
         # app.setToolbarButtonDisabled("OPEN")
-        app.setToolbarButtonDisabled("DOWNLOAD")
+        # app.setToolbarButtonDisabled("DOWNLOAD")
         app.setToolbarButtonDisabled("REFRESH")
-        app.setToolbarButtonDisabled("MD-PREVIOUS")
-        app.setToolbarButtonDisabled("MD-NEXT")
+        # app.setToolbarButtonDisabled("MD-PREVIOUS")
+        # app.setToolbarButtonDisabled("MD-NEXT")
         app.setToolbarButtonDisabled("ZOOM-IN")
         app.setToolbarButtonDisabled("ZOOM-OUT")
         app.setToolbarButtonDisabled("ARROW-1-LEFT")
@@ -164,8 +177,8 @@ class MangaViewer:
         app.setSize(480, 620)
         app.setSticky('NW')
         app.setPadX(10)
-        app.addIcon('Open manga directory', 'OPEN', compound='left')
-        app.addIcon('Download manga chapter from MangaRock', 'DOWNLOAD', compound='left')
+        app.addIcon('Download manga chapter from MangaRock website', 'DOWNLOAD', compound='left')
+        app.addIcon('Open manga local directory.', 'OPEN', compound='left')
         app.addIcon('Update information', 'REFRESH', compound='left')
         app.addIcon('Jump to previous page', 'MD-PREVIOUS', compound='left')
         app.addIcon('Jump to next page', 'MD-NEXT', compound='left')
@@ -197,10 +210,54 @@ class MangaViewer:
         app.addMessage('AboutContentMsg', 'Created by lchloride, under MIT license.\n'
                                           'GitHub: https://github.com/lchloride/manga_rock_crawler.\n'
                                           'Issues and any ideas about this application are welcomed.')
+        app.addWebLink('GitHub Repository Link', 'https://github.com/lchloride/manga_rock_crawler')
+        # app.addWebLink('GitHub Repository Link', 'https://github.com/lchloride/manga_rock_crawler')
         app.setMessageWidth('AboutContentMsg', 450)
 
         # set the button's name to match the SubWindow's name
         app.addNamedButton("Close", "About", app.hideSubWindow)
+        app.stopSubWindow()
+
+        # DownloadProgress dialog
+        app.startSubWindow("DownloadProgress", modal=True)
+        app.setFg('black')
+        app.setSize(480, 200)
+        app.setSticky('W')
+        app.setFont(14)
+        app.setPadX(10)
+        app.setPadY(5)
+
+        app.addMessage('DPDownloadMsg0', 'Start downloading...')
+        app.setMessageWidth('DPDownloadMsg0', 640)
+        app.addMessage('DPDownloadMsg1', 'Preprocessing...')
+        app.setMessageWidth('DPDownloadMsg1', 640)
+        app.addMessage('DPDownloadMsg2', 'Meta data: --')
+        app.setMessageWidth('DPDownloadMsg2', 640)
+        app.addMessage('DPDownloadMsg3', 'Image processing: --')
+        app.setMessageWidth('DPDownloadMsg3', 640)
+
+        # set the button's name to match the SubWindow's name
+        app.addNamedButton("Force Quit", "DPBtn", self.onDPBtnPressed, row=5, column=0)
+        app.stopSubWindow()
+
+        # Download dialog
+        app.startSubWindow("Download", modal=True)
+        app.setFg('black')
+        app.setSize(480, 200)
+        app.setSticky('NW')
+        app.setFont(14)
+        app.setPadX(10)
+        app.setPadY(10)
+
+        app.addLabel("MangaURLL", "Manga URL")
+        app.addEntry("MangaURLEntry", row=0, column=1)
+        app.addLabel('DirectoryL', 'Directory')
+        app.addDirectoryEntry("DirectoryEntry", row=1, column=1)
+        app.setFocus("MangaURLEntry")
+
+        # set the button's name to match the SubWindow's name
+        app.addNamedButton("Cancel", "Download", app.hideSubWindow, row=2, column=0)
+        app.addNamedButton("OK", "DownloadOk", self.onDownloadOkPressed, row=2, column=1)
         app.stopSubWindow()
 
     def __defaultCallback(self, name):
@@ -210,7 +267,11 @@ class MangaViewer:
         self.app.go()
 
     def onOpenToolPressed(self, btn):
-        self.mangaPath = self.app.directoryBox('Select Manga Directory')
+        path = self.app.directoryBox('Select Manga Directory')
+        if path is not None:
+            self.mangaPath = path
+        else:
+            return
         self.loadMangaDir()
 
     def updateNameMsg(self, aliasList):
@@ -244,6 +305,13 @@ class MangaViewer:
         self.app.setMessage('IntroMsg', intro)
 
     def loadMangaDir(self):
+        self.app.setToolbarButtonEnabled("ZOOM-IN")
+        self.app.setToolbarButtonEnabled("ZOOM-OUT")
+        self.app.setToolbarButtonEnabled("ARROW-1-LEFT")
+        self.app.setToolbarButtonEnabled("ARROW-1-RIGHT")
+        self.app.setToolbarButtonEnabled("ARROW-1-UP")
+        self.app.setToolbarButtonEnabled("ARROW-1-DOWN")
+
         self.loadMangaMeta()
         # Load the first image of this chapter
         self.currPage = 0
@@ -345,6 +413,163 @@ class MangaViewer:
 
     def openHelpWindow(self):
         self.app.showSubWindow('Help')
+
+    def openDownloadWindow(self):
+        self.app.showSubWindow('Download')
+
+    def onDownloadOkPressed(self, btn):
+        url = self.app.getEntry('MangaURLEntry').strip()
+        url = url[:url.rfind('?')] if url.rfind('?') != -1 else url
+        url = url[:-1] if url.endswith('/') else url
+        directory = self.app.getEntry('DirectoryEntry')
+        chapterId = url[url.rfind('mrs-chapter-') + len('mrs-chapter-'):]
+        seriesId = url[url.rfind('mrs-serie-') + len('mrs-serie-'):url.rfind('/chapter')]
+        self.downloadParam = {'url': url, 'chapterId': chapterId,
+                              'seriesId': seriesId, 'directory': directory}
+        # mr.getComicByChapter(chapterId, directory)
+        self.app.hideSubWindow('Download')
+        self.app.showSubWindow('DownloadProgress')
+
+        self.isDownloading = True
+        self.app.thread(self.downloadComic)
+
+    def setDPMsg(self, position, content):
+        if position not in [1, 2, 3]:
+            print(content)
+        else:
+            msgTitle = 'DPDownloadMsg' + str(position)
+            self.app.queueFunction(self.app.setMessage, msgTitle, content)
+
+    def downloadComic(self):
+        url = self.downloadParam['url']
+        directory = self.downloadParam['directory']
+        chapterId = self.downloadParam['chapterId']
+        seriesId = self.downloadParam['seriesId']
+
+        if not self.isDownloading:
+            return
+
+        if not os.path.exists(directory):
+            self.setDPMsg(1, 'Directory %s not exists, so created...' % directory)
+            try:
+                os.mkdir(directory)
+            except OSError:
+                self.setDPMsg(1, "Creation of the directory failed")
+            else:
+                self.setDPMsg(1, "Successfully created the directory")
+
+        mr = MangaRock()
+
+        self.setDPMsg(2, 'Meta data: Get series information...')
+
+        if not self.isDownloading:
+            return
+        metaObj = mr.getSeriesInfo(seriesId)
+
+        if not self.isDownloading:
+            return
+
+        isValid = False
+        for i, info in enumerate(metaObj['chapters']):
+            if info['oid'] == 'mrs-chapter-' + str(chapterId):
+                metaObj['current_chapter'] = i + 1
+                isValid = True
+                break
+
+        if not self.isDownloading:
+            return
+
+        if not isValid:
+            self.setDPMsg(2, 'Meta data: Invalid URL, this series does not have specific chapter.')
+            return
+
+        self.setDPMsg(2, 'Meta data: Series data, Done. ')
+
+        self.setDPMsg(2, 'Meta data: Get meta data of chapter %s.' % chapterId)
+
+        if not self.isDownloading:
+            return
+
+        mriList = mr.getMRIListByChapter(chapterId)
+        metaObj['manga_images'] = ['ch' + str(chapterId) + '_' + str(i + 1) + '.png'
+                                   for i in range(len(mriList))]
+
+        self.setDPMsg(2, 'Meta data: Get chapter data, Done')
+
+        if not self.isDownloading:
+            return
+        self.setDPMsg(2, 'Meta data: Write meta data...')
+        with open(os.path.join(directory, 'meta.json'), 'w') as f:
+            json.dump(metaObj, f)
+        self.setDPMsg(2, 'Meta data: Write meta data, Done.')
+
+        self.setDPMsg(3, 'Image processing: Get comic of chapter %s......' % chapterId)
+        for i, mri in enumerate(mriList):
+            if not self.isDownloading:
+                return
+            self.setDPMsg(3, 'Image processing: %d / %d' % (i + 1, len(mriList)))
+            mriFile = os.path.join(directory, 'ch%s_%d.mri' % (chapterId, i + 1))
+            webpFile = os.path.join(directory, 'ch%s_%d.webp' % (chapterId, i + 1))
+            pngFile = os.path.join(directory, 'ch%s_%d.png' % (chapterId, i + 1))
+            self.setDPMsg(3, 'Image processing: %d / %d, Get raw data...' % (i + 1, len(mriList)))
+            mr.downloadMRI(mri, mriFile)
+            if not self.isDownloading:
+                return
+            self.setDPMsg(3, 'Image processing: %d / %d, Parse raw data...' % (i + 1, len(mriList)))
+            mr.mri2webp(mriFile, webpFile)
+            self.setDPMsg(3, 'Image processing: %d / %d, Convert to png file...' % (i + 1, len(mriList)))
+            mr.webp2png(webpFile, pngFile)
+            self.setDPMsg(3, 'Image processing: %d / %d, Remove temporary files...' % (i + 1, len(mriList)))
+            os.remove(mriFile)
+            os.remove(webpFile)
+
+        if not self.isDownloading:
+            return
+        self.isDownloading = False
+        self.mangaPath = directory
+        self.mangaMeta = metaObj
+        self.mangaList = metaObj['manga_images']
+        self.setDPMsg(3, 'Image processing: Get comic of chapter %s finished.' % (chapterId))
+        self.app.setButton('DPBtn', 'Close')
+
+    def onDownloadCancelPressed(self, btn):
+        self.app.hideSubWindow('Download')
+
+    def onDPBtnPressed(self, btn):
+        if self.isDownloading:
+            # Force Quit is clicked
+            if self.app.yesNoBox('Warning', 'Do you want to quit?'):
+                self.isDownloading = False
+                print(self.isDownloading)
+            else:
+                return
+        else:
+            # Close is clicked
+            # Load content to pic
+            self.loadMangaDir()
+        self.app.hideSubWindow('DownloadProgress')
+
+    def writeDownloadMsg(self, message):
+        message0 = self.app.getMessage('DPDownloadMsg')
+        self.app.setMessage('DPDownloadMsg', message0 + '\n' + message0)
+
+    def onZoomInBtnPressed(self, btn):
+        if self.zoomLevel <= 5:
+            self.zoomLevel += 1
+            self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+
+    def onZoomOutBtnPressed(self, btn):
+        if self.zoomLevel > 0:
+            self.zoomLevel -= 1
+            self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+
+    def onMoveLeftBtnPressed(self, btn):
+        self.leftOffset += 20
+        self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+
+    def onMoveRightBtnPressed(self, btn):
+        self.leftOffset -= 20
+        self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
 
 if __name__ == '__main__':
