@@ -24,24 +24,37 @@ class MangaViewer:
         self.leftOffset = 0
         self.upOffset = 0
         self.zoomLevel = 0
+        self.zoomSizeX = 20
+        self.zoomSizeY = 20
         self.isDownloading = False
         self.__setLayout()
 
     def readImage(self, filepath):
         conf = self.conf
         oriImg0 = Image.open(filepath)
-        box = (max(0, self.zoomLevel*25-self.leftOffset), max(0, self.zoomLevel*25-self.upOffset),
-               min(oriImg0.size[0], oriImg0.size[0]-self.leftOffset-self.zoomLevel*25),
-               min(oriImg0.size[1], oriImg0.size[1]-self.upOffset-self.zoomLevel*25))
+        if int(self.zoomLevel*self.zoomSizeX-self.leftOffset) < 0:
+            self.leftOffset -= 25
+        if int(self.zoomLevel*self.zoomSizeY-self.upOffset) < 0:
+            self.upOffset -= 25
+        if int(oriImg0.size[0]-self.leftOffset-self.zoomLevel*self.zoomSizeX) > oriImg0.size[0]:
+            self.leftOffset += 25
+        if int(oriImg0.size[1]-self.upOffset-self.zoomLevel*self.zoomSizeY) > oriImg0.size[1]:
+            self.upOffset += 25
+
+        box = (max(0, int(self.zoomLevel*self.zoomSizeX-self.leftOffset)),
+               max(0, int(self.zoomLevel*self.zoomSizeY-self.upOffset)),
+               min(oriImg0.size[0], int(oriImg0.size[0]-self.leftOffset-self.zoomLevel*self.zoomSizeX)),
+               min(oriImg0.size[1], int(oriImg0.size[1]-self.upOffset-self.zoomLevel*self.zoomSizeY)))
         oriImg = oriImg0.crop(box)
-        # print(box, self.zoomLevel*25, self.leftOffset)
-        # oriImg = oriImg0
-        ratio = conf['manga_max_height'] / oriImg.size[1] if oriImg.size[1] > oriImg.size[0] else \
-            conf['manga_max_width'] / oriImg.size[0]
-        ratio = 1 if oriImg.size[0] < conf['manga_max_width'] and \
-                     oriImg.size[1] < conf['manga_max_height'] else ratio
-        newSize = (int(oriImg.size[0] * ratio), int(oriImg.size[1] * ratio))
+        ratio = conf['manga_max_height'] / oriImg0.size[1] if oriImg0.size[1] > oriImg0.size[0] else \
+            conf['manga_max_width'] / oriImg0.size[0]
+        # ratio = 1 if oriImg.size[0] < conf['manga_max_width'] and \
+        #              oriImg.size[1] < conf['manga_max_height'] else ratio
+        newSize = (int(oriImg0.size[0] * ratio), int(oriImg0.size[1] * ratio))
         image0 = oriImg.resize(newSize, Image.ANTIALIAS)
+        self.zoomSizeX = 20 if oriImg0.size[0] < 20 else (oriImg0.size[0]-100) / 20
+        self.zoomSizeY = 20 if oriImg0.size[1] < 20 else (oriImg0.size[1]-100) / 20
+        # print(box, ratio, newSize, self.zoomSizeX, self.zoomSizeY)
         img = ImageTk.PhotoImage(image0)
         return img
 
@@ -59,7 +72,7 @@ class MangaViewer:
         funcs = [self.openDownloadWindow, self.onOpenToolPressed, self.__defaultCallback,
                  self.loadPreviousManga, self.loadNextManga, self.jumpMangaPage,
                  self.onZoomInBtnPressed, self.onZoomOutBtnPressed, self.onMoveLeftBtnPressed,
-                 self.onMoveRightBtnPressed, self.__defaultCallback, self.__defaultCallback,
+                 self.onMoveRightBtnPressed, self.onMoveUpBtnPressed, self.onMoveDownBtnPressed,
                  self.__defaultCallback, self.openHelpWindow, self.openAboutWindow,
                  self.app.stop]
 
@@ -166,10 +179,12 @@ class MangaViewer:
         # currPage = 0
         # updatedAt = 0
         # updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
-        app.addStatusbar(fields=3)
+        app.addStatusbar(fields=5)
         app.setStatusbar("Chapter: N/A", 0)
         app.setStatusbar("Page: N/A", 1)
         app.setStatusbar("Updated at: N/A", 2)
+        app.setStatusbar("Zoom level: N/A", 3)
+        app.setStatusbar("Position Left: N/A, Up: N/A", 4)
 
         # Help dialog
         app.startSubWindow("Help", modal=True)
@@ -341,6 +356,8 @@ class MangaViewer:
     def updateMangaImage(self, filepath):
         picImageData = self.readImage(filepath)
         self.app.setImageData('Manga', picImageData, fmt='PhotoImage')
+        self.app.setStatusbar('Zoom Level: '+str(self.zoomLevel), 3)
+        self.app.setStatusbar("Position Left: %d, Up: %d" % (self.leftOffset, self.upOffset), 4)
 
     def loadMangaMeta(self):
         with open(os.path.join(self.mangaPath, 'meta.json'), 'r') as f:
@@ -554,7 +571,7 @@ class MangaViewer:
         self.app.setMessage('DPDownloadMsg', message0 + '\n' + message0)
 
     def onZoomInBtnPressed(self, btn):
-        if self.zoomLevel <= 5:
+        if self.zoomLevel <= 10:
             self.zoomLevel += 1
             self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
@@ -564,11 +581,19 @@ class MangaViewer:
             self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
     def onMoveLeftBtnPressed(self, btn):
-        self.leftOffset += 20
+        self.leftOffset += 25
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
     def onMoveRightBtnPressed(self, btn):
-        self.leftOffset -= 20
+        self.leftOffset -= 25
+        self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+
+    def onMoveUpBtnPressed(self, btn):
+        self.upOffset += 25
+        self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+
+    def onMoveDownBtnPressed(self, btn):
+        self.upOffset -= 25
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
 
