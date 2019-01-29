@@ -81,8 +81,9 @@ class MangaViewer:
         # app.setToolbarButtonDisabled("OPEN")
         # app.setToolbarButtonDisabled("DOWNLOAD")
         app.setToolbarButtonDisabled("REFRESH")
-        # app.setToolbarButtonDisabled("MD-PREVIOUS")
-        # app.setToolbarButtonDisabled("MD-NEXT")
+        app.setToolbarButtonDisabled("MD-PREVIOUS")
+        app.setToolbarButtonDisabled("MD-NEXT")
+        app.setToolbarButtonDisabled("MD-REPEAT")
         app.setToolbarButtonDisabled("ZOOM-IN")
         app.setToolbarButtonDisabled("ZOOM-OUT")
         app.setToolbarButtonDisabled("ARROW-1-LEFT")
@@ -274,6 +275,17 @@ class MangaViewer:
         app.addNamedButton("Cancel", "Download", app.hideSubWindow, row=2, column=0)
         app.addNamedButton("OK", "DownloadOk", self.onDownloadOkPressed, row=2, column=1)
         app.stopSubWindow()
+
+        # Bind keys
+        app.bindKey("<Left>", self.loadPreviousManga)
+        app.bindKey("<Right>", self.loadNextManga)
+        app.bindKey("<a>", self.onMoveLeftBtnPressed)
+        app.bindKey("<s>", self.onMoveDownBtnPressed)
+        app.bindKey("<d>", self.onMoveRightBtnPressed)
+        app.bindKey("<w>", self.onMoveUpBtnPressed)
+        app.bindKey("<z>", self.onZoomInBtnPressed)
+        app.bindKey("<x>", self.onZoomOutBtnPressed)
+
 
     def __defaultCallback(self, name):
         print(name)
