@@ -99,7 +99,7 @@ class MangaViewer:
         app.setSticky("NEWS")
         app.setStretch("BOTH")
 
-        app.addImageData('Manga', self.readImage('./1.png'), fmt='PhotoImage')
+        app.addImageData('Manga', self.readImage('./intro.png'), fmt='PhotoImage')
         app.setImageSize('Manga', conf['manga_max_width'], conf['manga_max_height'])
         app.stopFrame()
 
