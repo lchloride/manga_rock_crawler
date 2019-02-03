@@ -5,11 +5,13 @@ import json
 import os
 import requests as rs
 import sys
+import time
+import codecs
 from main import MangaRock
 
 
 class MangaViewer:
-    def __init__(self):
+    def __init__(self, language="ENGLISH"):
         self.conf = {'width': 900, 'height': 740,
                      'manga_max_width': 560, 'manga_max_height': 660,
                      'manga_bg': 'black', 'info_width': 200,
@@ -27,24 +29,43 @@ class MangaViewer:
         self.zoomSizeX = 20
         self.zoomSizeY = 20
         self.isDownloading = False
+        self.language = language
+        self.langObj = None
+        self.initLang()
         self.__setLayout()
+
+    def initLang(self):
+        with codecs.open('./lang.json', 'r', 'utf8') as f:
+            self.langObj = json.load(f)
+
+    def translate(self, key, default=None):
+        if self.langObj is None or type(self.langObj) != dict:
+            return default
+        else:
+            if self.language in self.langObj:
+                if key in self.langObj[self.language]:
+                    return self.langObj[self.language][key]
+                else:
+                    return default
+            else:
+                return default
 
     def readImage(self, filepath):
         conf = self.conf
         oriImg0 = Image.open(filepath)
-        if int(self.zoomLevel*self.zoomSizeX-self.leftOffset) < 0:
+        if int(self.zoomLevel * self.zoomSizeX - self.leftOffset) < 0:
             self.leftOffset -= 25
-        if int(self.zoomLevel*self.zoomSizeY-self.upOffset) < 0:
+        if int(self.zoomLevel * self.zoomSizeY - self.upOffset) < 0:
             self.upOffset -= 25
-        if int(oriImg0.size[0]-self.leftOffset-self.zoomLevel*self.zoomSizeX) > oriImg0.size[0]:
+        if int(oriImg0.size[0] - self.leftOffset - self.zoomLevel * self.zoomSizeX) > oriImg0.size[0]:
             self.leftOffset += 25
-        if int(oriImg0.size[1]-self.upOffset-self.zoomLevel*self.zoomSizeY) > oriImg0.size[1]:
+        if int(oriImg0.size[1] - self.upOffset - self.zoomLevel * self.zoomSizeY) > oriImg0.size[1]:
             self.upOffset += 25
 
-        box = (max(0, int(self.zoomLevel*self.zoomSizeX-self.leftOffset)),
-               max(0, int(self.zoomLevel*self.zoomSizeY-self.upOffset)),
-               min(oriImg0.size[0], int(oriImg0.size[0]-self.leftOffset-self.zoomLevel*self.zoomSizeX)),
-               min(oriImg0.size[1], int(oriImg0.size[1]-self.upOffset-self.zoomLevel*self.zoomSizeY)))
+        box = (max(0, int(self.zoomLevel * self.zoomSizeX - self.leftOffset)),
+               max(0, int(self.zoomLevel * self.zoomSizeY - self.upOffset)),
+               min(oriImg0.size[0], int(oriImg0.size[0] - self.leftOffset - self.zoomLevel * self.zoomSizeX)),
+               min(oriImg0.size[1], int(oriImg0.size[1] - self.upOffset - self.zoomLevel * self.zoomSizeY)))
         oriImg = oriImg0.crop(box)
         ratio = conf['manga_max_height'] / oriImg0.size[1] if oriImg0.size[1] > oriImg0.size[0] else \
             conf['manga_max_width'] / oriImg0.size[0]
@@ -52,8 +73,8 @@ class MangaViewer:
         #              oriImg.size[1] < conf['manga_max_height'] else ratio
         newSize = (int(oriImg0.size[0] * ratio), int(oriImg0.size[1] * ratio))
         image0 = oriImg.resize(newSize, Image.ANTIALIAS)
-        self.zoomSizeX = 20 if oriImg0.size[0] < 20 else (oriImg0.size[0]-100) / 20
-        self.zoomSizeY = 20 if oriImg0.size[1] < 20 else (oriImg0.size[1]-100) / 20
+        self.zoomSizeX = 20 if oriImg0.size[0] < 20 else (oriImg0.size[0] - 100) / 20
+        self.zoomSizeY = 20 if oriImg0.size[1] < 20 else (oriImg0.size[1] - 100) / 20
         # print(box, ratio, newSize, self.zoomSizeX, self.zoomSizeY)
         img = ImageTk.PhotoImage(image0)
         return img
@@ -158,7 +179,7 @@ class MangaViewer:
         labelList = ['N/A']
         labelStr = ''
         for l in labelList:
-            labelStr += l + ', '
+            labelStr += app.translate(l, '--') + ', '
         labelStr = labelStr[:-2]
         app.addLabel('LabelL', 'Labels:', row=rowCnt, column=0)
         app.addMessage('LabelMsg', labelStr, row=rowCnt, column=1)
@@ -181,11 +202,12 @@ class MangaViewer:
         # updatedAt = 0
         # updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
         app.addStatusbar(fields=5)
-        app.setStatusbar("Chapter: N/A", 0)
-        app.setStatusbar("Page: N/A", 1)
-        app.setStatusbar("Updated at: N/A", 2)
-        app.setStatusbar("Zoom level: N/A", 3)
-        app.setStatusbar("Position Left: N/A, Up: N/A", 4)
+        app.setStatusbar(self.translate("ChapterSB", default="Chapter: ") + "N/A", 0)
+        app.setStatusbar(self.translate("PageSB", "Page: ") + "N/A", 1)
+        app.setStatusbar(self.translate("Updated atSB", "Updated at: ") + "N/A", 2)
+        app.setStatusbar(self.translate("Zoom levelSB", "Zoom level: ") + "N/A", 3)
+        app.setStatusbar(self.translate("Position LeftSB", "Position Left: ") + "N/A" +
+                         self.translate("UpSB", " Up: ") + "N/A", 4)
 
         # Help dialog
         app.startSubWindow("Help", modal=True)
@@ -272,7 +294,7 @@ class MangaViewer:
         app.setFocus("MangaURLEntry")
 
         # set the button's name to match the SubWindow's name
-        app.addNamedButton("Cancel", "Download", app.hideSubWindow, row=2, column=0)
+        app.addNamedButton("Cancel", "DownloadCancel", app.hideSubWindow, row=2, column=0)
         app.addNamedButton("OK", "DownloadOk", self.onDownloadOkPressed, row=2, column=1)
         app.stopSubWindow()
 
@@ -286,12 +308,13 @@ class MangaViewer:
         app.bindKey("<z>", self.onZoomInBtnPressed)
         app.bindKey("<x>", self.onZoomOutBtnPressed)
 
-
     def __defaultCallback(self, name):
         print(name)
 
-    def go(self):
-        self.app.go()
+    def go(self, language):
+        self.language = language
+        print(self.language)
+        self.app.go(language)
 
     def onOpenToolPressed(self, btn):
         path = self.app.directoryBox('Select Manga Directory')
@@ -354,22 +377,28 @@ class MangaViewer:
             self.app.setToolbarButtonDisabled("MD-PREVIOUS")
             self.app.setToolbarButtonEnabled("MD-NEXT")
 
-        self.app.setStatusbar('Chapter: %d / %d' %
-                              (self.mangaMeta['current_chapter'], self.mangaMeta['total_chapters']), 0)
-        self.app.setStatusbar('Page: 1 / %d' % len(self.mangaMeta['manga_images']), 1)
+        self.app.setStatusbar('%s %d / %d' %
+                              (self.app.translate("ChapterSB", default="Chapter: "),
+                               self.mangaMeta['current_chapter'], self.mangaMeta['total_chapters']), 0)
+        self.app.setStatusbar('%s 1 / %d' % (self.app.translate("PageSB", "Page: "),
+                                             len(self.mangaMeta['manga_images'])), 1)
         try:
             updatedAt = self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['updatedAt']
             updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
         except KeyError as e:
             updatedAtStr = 'N/A'
-        self.app.setStatusbar('Updated at: %s' % updatedAtStr, 2)
+        self.app.setStatusbar('%s %s' % (self.app.translate("Updated atSB", "Updated at: "),
+                                         updatedAtStr), 2)
         self.app.debug("User %s, has accessed the app from %s", '1', '2')
 
     def updateMangaImage(self, filepath):
         picImageData = self.readImage(filepath)
         self.app.setImageData('Manga', picImageData, fmt='PhotoImage')
-        self.app.setStatusbar('Zoom Level: '+str(self.zoomLevel), 3)
-        self.app.setStatusbar("Position Left: %d, Up: %d" % (self.leftOffset, self.upOffset), 4)
+        self.app.setStatusbar(self.app.translate("Zoom levelSB", "Zoom level: ") + ' ' +
+                              str(self.zoomLevel), 3)
+        self.app.setStatusbar("%s %d, %s %d" % (self.app.translate("Position LeftSB", "Position Left: "),
+                                                self.leftOffset, self.app.translate("UpSB", " Up: "),
+                                                self.upOffset), 4)
 
     def loadMangaMeta(self):
         with open(os.path.join(self.mangaPath, 'meta.json'), 'r') as f:
@@ -383,7 +412,7 @@ class MangaViewer:
         self.updateStateMsg(metaObj['completed'])
         labelList = []
         for label in metaObj['rich_categories']:
-            labelList.append(label['name'])
+            labelList.append(self.app.translate(label['name'], '--'))
         self.updateLabelMsg(labelList)
         self.updateLastUpdatedMsg(metaObj['last_update'])
         self.updateIntroMsg(metaObj['description'])
@@ -393,8 +422,8 @@ class MangaViewer:
             return
         self.currPage += 1
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
-        self.app.setStatusbar('Page: %d / %d'
-                              % (self.currPage + 1, len(self.mangaMeta['manga_images'])), 1)
+        self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
+                                             len(self.mangaMeta['manga_images'])), 1)
         self.app.setToolbarButtonEnabled("MD-PREVIOUS")
         if self.currPage == len(self.mangaList) - 1:
             self.app.setToolbarButtonDisabled("MD-NEXT")
@@ -406,8 +435,8 @@ class MangaViewer:
             return
         self.currPage -= 1
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
-        self.app.setStatusbar('Page: %d / %d'
-                              % (self.currPage + 1, len(self.mangaMeta['manga_images'])), 1)
+        self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
+                                             len(self.mangaMeta['manga_images'])), 1)
         self.app.setToolbarButtonEnabled("MD-NEXT")
         if self.currPage == 0:
             self.app.setToolbarButtonDisabled("MD-PREVIOUS")
@@ -424,8 +453,8 @@ class MangaViewer:
                 break
         self.currPage = page - 1
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
-        self.app.setStatusbar('Page: %d / %d'
-                              % (self.currPage + 1, len(self.mangaMeta['manga_images'])), 1)
+        self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
+                                             len(self.mangaMeta['manga_images'])), 1)
 
         if self.currPage == 0:
             self.app.setToolbarButtonDisabled("MD-PREVIOUS")
@@ -610,5 +639,5 @@ class MangaViewer:
 
 
 if __name__ == '__main__':
-    mv = MangaViewer()
-    mv.go()
+    mv = MangaViewer("简体中文")
+    mv.go("简体中文")
