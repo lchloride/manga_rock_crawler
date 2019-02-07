@@ -19,7 +19,7 @@ class MangaViewer:
         self.app = gui("MangaRock Viewer", "%dx%d" % (self.conf['width'], self.conf['height']))
         self.mangaPath = './'
         self.nameMsgTitle = []
-        self.mangaMeta = {}
+        self.mangaMeta = None
         self.currPage = -1  # starting from 0
         self.downloadParam = {}
         self.mangaList = []
@@ -31,12 +31,33 @@ class MangaViewer:
         self.isDownloading = False
         self.language = language
         self.langObj = None
+        self.settingObj = None
+        self.readSettings()
         self.initLang()
         self.__setLayout()
 
     def initLang(self):
         with codecs.open('./lang.json', 'r', 'utf8') as f:
             self.langObj = json.load(f)
+        if self.settingObj is not None and 'lang' in self.settingObj:
+            self.language = self.getSetting('lang')
+
+    def readSettings(self):
+        with codecs.open('./settings.json', 'r', 'utf-8') as f:
+            self.settingObj = json.load(f)
+
+    def getSetting(self, key):
+        if key not in self.settingObj:
+            return None
+        else:
+            return self.settingObj[key]
+
+    def putSetting(self, key, value):
+        self.settingObj[key] = value
+
+    def writeSettings(self):
+        with codecs.open('./settings.json', 'w', 'utf-8') as f:
+            json.dump(self.settingObj, f)
 
     def translate(self, key, default=None):
         if self.langObj is None or type(self.langObj) != dict:
@@ -50,17 +71,50 @@ class MangaViewer:
             else:
                 return default
 
+    def changeLanguage(self, language):
+        if language not in self.langObj:
+            raise TypeError('Cannot find language info: '+str(language))
+        if self.mangaMeta is not None:
+            self.app.setStatusbar('%s %d / %d' %
+                                  (self.app.translate("ChapterSB", default="Chapter: "),
+                                   self.mangaMeta['current_chapter'], self.mangaMeta['total_chapters']), 0)
+            self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
+                                                 len(self.mangaMeta['manga_images'])), 1)
+            try:
+                updatedAt = self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['updatedAt']
+                updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
+            except KeyError as e:
+                updatedAtStr = 'N/A'
+            self.app.setStatusbar('%s %s' % (self.app.translate("Updated atSB", "Updated at: "),
+                                             updatedAtStr), 2)
+            self.app.setStatusbar(self.app.translate("Zoom levelSB", "Zoom level: ") + ' ' +
+                                  str(self.zoomLevel), 3)
+            self.app.setStatusbar("%s %d, %s %d" % (self.app.translate("Position LeftSB", "Position Left: "),
+                                                    self.leftOffset, self.app.translate("UpSB", " Up: "),
+                                                    self.upOffset), 4)
+        else:
+            self.app.setStatusbar('%s N/A' %
+                                  self.app.translate("ChapterSB", default="Chapter: "), 0)
+            self.app.setStatusbar('%s N/A' % self.app.translate("PageSB", "Page: "), 1)
+
+            updatedAtStr = 'N/A'
+            self.app.setStatusbar('%s %s' % (self.app.translate("Updated atSB", "Updated at: "),
+                                             updatedAtStr), 2)
+            self.app.setStatusbar(self.app.translate("Zoom levelSB", "Zoom level: ") + ' N/A', 3)
+            self.app.setStatusbar("%s N/A, %s N/A" % (self.app.translate("Position LeftSB", "Position Left: "),
+                                                    self.app.translate("UpSB", " Up: ")), 4)
+
     def readImage(self, filepath):
         conf = self.conf
         oriImg0 = Image.open(filepath)
         if int(self.zoomLevel * self.zoomSizeX - self.leftOffset) < 0:
-            self.leftOffset -= 25
+            self.leftOffset -= 50
         if int(self.zoomLevel * self.zoomSizeY - self.upOffset) < 0:
-            self.upOffset -= 25
+            self.upOffset -= 50
         if int(oriImg0.size[0] - self.leftOffset - self.zoomLevel * self.zoomSizeX) > oriImg0.size[0]:
-            self.leftOffset += 25
+            self.leftOffset += 50
         if int(oriImg0.size[1] - self.upOffset - self.zoomLevel * self.zoomSizeY) > oriImg0.size[1]:
-            self.upOffset += 25
+            self.upOffset += 50
 
         box = (max(0, int(self.zoomLevel * self.zoomSizeX - self.leftOffset)),
                max(0, int(self.zoomLevel * self.zoomSizeY - self.upOffset)),
@@ -94,7 +148,7 @@ class MangaViewer:
                  self.loadPreviousManga, self.loadNextManga, self.jumpMangaPage,
                  self.onZoomInBtnPressed, self.onZoomOutBtnPressed, self.onMoveLeftBtnPressed,
                  self.onMoveRightBtnPressed, self.onMoveUpBtnPressed, self.onMoveDownBtnPressed,
-                 self.__defaultCallback, self.openHelpWindow, self.openAboutWindow,
+                 self.openSettingWindow, self.openHelpWindow, self.openAboutWindow,
                  self.app.stop]
 
         app.addToolbar(tools, funcs, findIcon=True)
@@ -111,7 +165,7 @@ class MangaViewer:
         app.setToolbarButtonDisabled("ARROW-1-RIGHT")
         app.setToolbarButtonDisabled("ARROW-1-UP")
         app.setToolbarButtonDisabled("ARROW-1-DOWN")
-        app.setToolbarButtonDisabled("SETTINGS")
+        # app.setToolbarButtonDisabled("SETTINGS")
         # app.setToolbarButtonDisabled("HELP")
         # app.setToolbarButtonDisabled("ABOUT")
 
@@ -294,8 +348,29 @@ class MangaViewer:
         app.setFocus("MangaURLEntry")
 
         # set the button's name to match the SubWindow's name
-        app.addNamedButton("Cancel", "DownloadCancel", app.hideSubWindow, row=2, column=0)
-        app.addNamedButton("OK", "DownloadOk", self.onDownloadOkPressed, row=2, column=1)
+        app.addNamedButton("Cancel", "DownloadCancel", self.onDownloadCancelPressed, 2, 0, 1)
+        app.addNamedButton("OK", "DownloadOk", self.onDownloadOkPressed, 2, 1, 1)
+        app.stopSubWindow()
+
+        # Setting dialog
+        app.startSubWindow("Setting", modal=True)
+        app.setFg('black')
+        app.setSize(480, 200)
+        app.setSticky('NW')
+        app.setFont(14)
+        app.setPadX(10)
+        app.setPadY(10)
+
+        app.startLabelFrame("Language")
+        app.addRadioButton("lang", "ENGLISH")
+        app.addRadioButton("lang", "简体中文")
+        app.stopLabelFrame()
+
+        # set the button's name to match the SubWindow's name
+        app.addButtons(["Update", "Cancel"],
+                       [self.onSettingUpdateBtnPressed, self.onSettingCancelPressed], 2, 0, 2)
+        # app.addNamedButton("Cancel", "SettingCancel", app.hideSubWindow, row=2, column=0)
+        # app.addNamedButton("OK", "SettingOk", self.onDownloadOkPressed, row=2, column=1)
         app.stopSubWindow()
 
         # Bind keys
@@ -308,13 +383,26 @@ class MangaViewer:
         app.bindKey("<z>", self.onZoomInBtnPressed)
         app.bindKey("<x>", self.onZoomOutBtnPressed)
 
+        def test(e):
+            print(e)
+
+        app.appWindow.bind('<Configure>', test)
+
     def __defaultCallback(self, name):
         print(name)
 
-    def go(self, language):
-        self.language = language
-        print(self.language)
-        self.app.go(language)
+    def go(self, language=None):
+        if language is None:
+            self.language = self.getSetting('lang')
+        else:
+            self.language = language
+        self.app.go(self.language)
+
+    def onSettingCancelPressed(self):
+        self.app.hideSubWindow('Setting')
+
+    def onDownloadCancelPressed(self):
+        self.app.hideSubWindow('Download')
 
     def onOpenToolPressed(self, btn):
         path = self.app.directoryBox('Select Manga Directory')
@@ -357,12 +445,15 @@ class MangaViewer:
     def loadMangaDir(self):
         self.app.setToolbarButtonEnabled("ZOOM-IN")
         self.app.setToolbarButtonEnabled("ZOOM-OUT")
+        self.app.setToolbarButtonEnabled("MD-REPEAT")
         self.app.setToolbarButtonEnabled("ARROW-1-LEFT")
         self.app.setToolbarButtonEnabled("ARROW-1-RIGHT")
         self.app.setToolbarButtonEnabled("ARROW-1-UP")
         self.app.setToolbarButtonEnabled("ARROW-1-DOWN")
 
-        self.loadMangaMeta()
+        if not self.loadMangaMeta():
+            return
+
         # Load the first image of this chapter
         self.currPage = 0
         self.mangaList = self.mangaMeta['manga_images']
@@ -401,8 +492,12 @@ class MangaViewer:
                                                 self.upOffset), 4)
 
     def loadMangaMeta(self):
-        with open(os.path.join(self.mangaPath, 'meta.json'), 'r') as f:
-            metaObj = json.load(f)
+        try:
+            with open(os.path.join(self.mangaPath, 'meta.json'), 'r') as f:
+                metaObj = json.load(f)
+        except FileNotFoundError as e:
+            self.app.errorBox('Error', 'meta.json not exists')
+            return False
 
         self.mangaMeta = metaObj
 
@@ -416,6 +511,7 @@ class MangaViewer:
         self.updateLabelMsg(labelList)
         self.updateLastUpdatedMsg(metaObj['last_update'])
         self.updateIntroMsg(metaObj['description'])
+        return True
 
     def loadNextManga(self):
         if self.currPage == len(self.mangaList) - 1:
@@ -447,10 +543,12 @@ class MangaViewer:
         isFirst = True
         while True:
             page = self.app.integerBox('Jump to...', '%s\nInput the page number(1-%d)'
-                                       % ('Invalid page number!',
+                                       % ('Invalid page number!' if not isFirst else '',
                                           len(self.mangaMeta['manga_images'])))
-            if 0 < page <= len(self.mangaMeta['manga_images']):
+            if page is not None and 0 < page <= len(self.mangaMeta['manga_images']):
                 break
+            else:
+                isFirst = False
         self.currPage = page - 1
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
         self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
@@ -472,14 +570,24 @@ class MangaViewer:
     def openHelpWindow(self):
         self.app.showSubWindow('Help')
 
+    def openSettingWindow(self):
+        self.app.showSubWindow('Setting')
+        self.app.setRadioButton('lang', self.getSetting('lang'))
+
     def openDownloadWindow(self):
         self.app.showSubWindow('Download')
 
     def onDownloadOkPressed(self, btn):
         url = self.app.getEntry('MangaURLEntry').strip()
+        if len(url) == 0:
+            self.app.errorBox('Error', 'URL cannot be empty')
+            return
         url = url[:url.rfind('?')] if url.rfind('?') != -1 else url
         url = url[:-1] if url.endswith('/') else url
         directory = self.app.getEntry('DirectoryEntry')
+        if len(directory) == 0:
+            self.app.errorBox('Error', 'Directory cannot be empty')
+            return
         chapterId = url[url.rfind('mrs-chapter-') + len('mrs-chapter-'):]
         seriesId = url[url.rfind('mrs-serie-') + len('mrs-serie-'):url.rfind('/chapter')]
         self.downloadParam = {'url': url, 'chapterId': chapterId,
@@ -622,22 +730,32 @@ class MangaViewer:
             self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
     def onMoveLeftBtnPressed(self, btn):
-        self.leftOffset += 25
+        self.leftOffset += 50
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
     def onMoveRightBtnPressed(self, btn):
-        self.leftOffset -= 25
+        self.leftOffset -= 50
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
     def onMoveUpBtnPressed(self, btn):
-        self.upOffset += 25
+        self.upOffset += 50
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
 
     def onMoveDownBtnPressed(self, btn):
-        self.upOffset -= 25
+        self.upOffset -= 50
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+
+    def onSettingUpdateBtnPressed(self, btn):
+        self.language = self.app.getRadioButton('lang')
+        self.putSetting('lang', self.language)
+        self.writeSettings()
+        self.app.hideSubWindow('Setting')
+        self.app.changeLanguage(self.language)
+        self.changeLanguage(self.language)
+        if self.mangaMeta is not None:
+            self.loadMangaMeta()
 
 
 if __name__ == '__main__':
-    mv = MangaViewer("简体中文")
-    mv.go("简体中文")
+    mv = MangaViewer()
+    mv.go()
