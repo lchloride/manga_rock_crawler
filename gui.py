@@ -168,6 +168,7 @@ class MangaViewer:
         # app.setToolbarButtonDisabled("SETTINGS")
         # app.setToolbarButtonDisabled("HELP")
         # app.setToolbarButtonDisabled("ABOUT")
+        app.setToolbarPinned(pinned=False)
 
         app.startFrame("LEFT", row=0, column=0, rowspan=1, colspan=2)
         app.setBg(conf['manga_bg'])
@@ -177,6 +178,8 @@ class MangaViewer:
         app.addImageData('Manga', self.readImage('./intro.png'), fmt='PhotoImage')
         app.setImageSize('Manga', conf['manga_max_width'], conf['manga_max_height'])
         app.stopFrame()
+
+        app.getImageWidget('Manga').bind('<Configure>', self.onImageSizeChanged)
 
         app.startFrame("RIGHT", row=0, column=2, rowspan=1, colspan=1)
 
@@ -382,11 +385,6 @@ class MangaViewer:
         app.bindKey("<w>", self.onMoveUpBtnPressed)
         app.bindKey("<z>", self.onZoomInBtnPressed)
         app.bindKey("<x>", self.onZoomOutBtnPressed)
-
-        def test(e):
-            print(e)
-
-        app.appWindow.bind('<Configure>', test)
 
     def __defaultCallback(self, name):
         print(name)
@@ -744,6 +742,14 @@ class MangaViewer:
     def onMoveDownBtnPressed(self, btn):
         self.upOffset -= 50
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+
+    def onImageSizeChanged(self, event):
+        self.conf['manga_max_width'] = max(560, event.width)
+        self.conf['manga_max_height'] = max(660, event.height)
+        if self.mangaMeta is not None:
+            self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+        else:
+            self.updateMangaImage('./intro.png')
 
     def onSettingUpdateBtnPressed(self, btn):
         self.language = self.app.getRadioButton('lang')
