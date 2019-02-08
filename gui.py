@@ -3,11 +3,37 @@ from PIL import Image, ImageTk
 from datetime import datetime
 import json
 import os
-import requests as rs
-import sys
 import time
 import codecs
-from main import MangaRock
+from main import *
+from multiprocessing import Queue
+
+
+class AtomicInt:
+    def __init__(self, value):
+        self.value = value
+        self.lock = threading.Lock()
+
+    def set(self, value):
+        self.lock.acquire()
+        self.value = value
+        self.lock.release()
+
+    def get(self):
+        return self.value
+
+    def add(self, number):
+        self.lock.acquire()
+        self.value += number
+        v = self.value
+        self.lock.release()
+        return v
+
+    def inc(self):
+        return self.add(1)
+
+    def dec(self):
+        return self.add(-1)
 
 
 class MangaViewer:
@@ -29,9 +55,14 @@ class MangaViewer:
         self.zoomSizeX = 20
         self.zoomSizeY = 20
         self.isDownloading = False
+        self.isMetaReloading = False
         self.language = language
         self.langObj = None
         self.settingObj = None
+        self.mriProgress = AtomicInt(0)
+        self.webpProgress = AtomicInt(0)
+        self.pngProgress = AtomicInt(0)
+        self.threads = []
         self.readSettings()
         self.initLang()
         self.__setLayout()
@@ -73,13 +104,13 @@ class MangaViewer:
 
     def changeLanguage(self, language):
         if language not in self.langObj:
-            raise TypeError('Cannot find language info: '+str(language))
+            raise TypeError('Cannot find language info: ' + str(language))
         if self.mangaMeta is not None:
             self.app.setStatusbar('%s %d / %d' %
                                   (self.app.translate("ChapterSB", default="Chapter: "),
                                    self.mangaMeta['current_chapter'], self.mangaMeta['total_chapters']), 0)
             self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
-                                                 len(self.mangaMeta['manga_images'])), 1)
+                                                  len(self.mangaMeta['manga_images'])), 1)
             try:
                 updatedAt = self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['updatedAt']
                 updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
@@ -102,7 +133,7 @@ class MangaViewer:
                                              updatedAtStr), 2)
             self.app.setStatusbar(self.app.translate("Zoom levelSB", "Zoom level: ") + ' N/A', 3)
             self.app.setStatusbar("%s N/A, %s N/A" % (self.app.translate("Position LeftSB", "Position Left: "),
-                                                    self.app.translate("UpSB", " Up: ")), 4)
+                                                      self.app.translate("UpSB", " Up: ")), 4)
 
     def readImage(self, filepath):
         conf = self.conf
@@ -144,7 +175,7 @@ class MangaViewer:
                  "ZOOM-IN", "ZOOM-OUT",
                  "ARROW-1-LEFT", "ARROW-1-RIGHT", "ARROW-1-UP",
                  "ARROW-1-DOWN", "SETTINGS", "HELP", "ABOUT", "OFF"]
-        funcs = [self.openDownloadWindow, self.onOpenToolPressed, self.__defaultCallback,
+        funcs = [self.openDownloadWindow, self.onOpenToolPressed, self.onReloadMetaPressed,
                  self.loadPreviousManga, self.loadNextManga, self.jumpMangaPage,
                  self.onZoomInBtnPressed, self.onZoomOutBtnPressed, self.onMoveLeftBtnPressed,
                  self.onMoveRightBtnPressed, self.onMoveUpBtnPressed, self.onMoveDownBtnPressed,
@@ -155,7 +186,7 @@ class MangaViewer:
 
         # app.setToolbarButtonDisabled("OPEN")
         # app.setToolbarButtonDisabled("DOWNLOAD")
-        app.setToolbarButtonDisabled("REFRESH")
+        # app.setToolbarButtonDisabled("REFRESH")
         app.setToolbarButtonDisabled("MD-PREVIOUS")
         app.setToolbarButtonDisabled("MD-NEXT")
         app.setToolbarButtonDisabled("MD-REPEAT")
@@ -258,13 +289,19 @@ class MangaViewer:
         # currPage = 0
         # updatedAt = 0
         # updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
-        app.addStatusbar(fields=5)
+        app.addStatusbar(fields=6)
         app.setStatusbar(self.translate("ChapterSB", default="Chapter: ") + "N/A", 0)
         app.setStatusbar(self.translate("PageSB", "Page: ") + "N/A", 1)
         app.setStatusbar(self.translate("Updated atSB", "Updated at: ") + "N/A", 2)
         app.setStatusbar(self.translate("Zoom levelSB", "Zoom level: ") + "N/A", 3)
         app.setStatusbar(self.translate("Position LeftSB", "Position Left: ") + "N/A" +
                          self.translate("UpSB", " Up: ") + "N/A", 4)
+        app.setStatusbar("", 5)
+        app.setStatusbarWidth(5, 0)
+        app.setStatusbarWidth(5, 1)
+        app.setStatusbarWidth(5, 3)
+        app.setStatusbarWidth(10, 2)
+        app.setStatusbarWidth(20, 5)
 
         # Help dialog
         app.startSubWindow("Help", modal=True)
@@ -328,11 +365,15 @@ class MangaViewer:
         app.setMessageWidth('DPDownloadMsg1', 640)
         app.addMessage('DPDownloadMsg2', 'Meta data: --')
         app.setMessageWidth('DPDownloadMsg2', 640)
-        app.addMessage('DPDownloadMsg3', 'Image processing: --')
+        app.addMessage('DPDownloadMsg3', '')
         app.setMessageWidth('DPDownloadMsg3', 640)
+        app.addMessage('DPDownloadMsg4', '')
+        app.setMessageWidth('DPDownloadMsg4', 640)
+        app.addMessage('DPDownloadMsg5', '')
+        app.setMessageWidth('DPDownloadMsg5', 640)
 
         # set the button's name to match the SubWindow's name
-        app.addNamedButton("Force Quit", "DPBtn", self.onDPBtnPressed, row=5, column=0)
+        app.addNamedButton("Force Quit", "DPBtn", self.onDPBtnPressed, row=7, column=0)
         app.stopSubWindow()
 
         # Download dialog
@@ -517,7 +558,7 @@ class MangaViewer:
         self.currPage += 1
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
         self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
-                                             len(self.mangaMeta['manga_images'])), 1)
+                                              len(self.mangaMeta['manga_images'])), 1)
         self.app.setToolbarButtonEnabled("MD-PREVIOUS")
         if self.currPage == len(self.mangaList) - 1:
             self.app.setToolbarButtonDisabled("MD-NEXT")
@@ -530,7 +571,7 @@ class MangaViewer:
         self.currPage -= 1
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
         self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
-                                             len(self.mangaMeta['manga_images'])), 1)
+                                              len(self.mangaMeta['manga_images'])), 1)
         self.app.setToolbarButtonEnabled("MD-NEXT")
         if self.currPage == 0:
             self.app.setToolbarButtonDisabled("MD-PREVIOUS")
@@ -550,7 +591,7 @@ class MangaViewer:
         self.currPage = page - 1
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
         self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
-                                             len(self.mangaMeta['manga_images'])), 1)
+                                              len(self.mangaMeta['manga_images'])), 1)
 
         if self.currPage == 0:
             self.app.setToolbarButtonDisabled("MD-PREVIOUS")
@@ -575,6 +616,23 @@ class MangaViewer:
     def openDownloadWindow(self):
         self.app.showSubWindow('Download')
 
+    def onReloadMetaPressed(self):
+        print(self.mangaList)
+        print(self.mangaMeta)
+        print(self.mangaPath)
+        if self.mangaMeta is None or len(self.mangaList) == 0:
+            return
+        chapterId = self.mangaMeta['chapters'][self.mangaMeta['current_chapter']-1]['oid']
+        chapterId = chapterId[chapterId.rfind('-')+1:]
+        seriesId = self.mangaMeta['oid']
+        seriesId = seriesId[seriesId.rfind('-')+1:]
+        self.downloadParam = {'url': '',
+                              'chapterId': chapterId,
+                              'seriesId': seriesId, 'directory': self.mangaPath}
+        self.app.setStatusbar(self.translate('RefreshMetaMsg', 'Refreshing manga meta data...'), 5)
+        self.isMetaReloading = True
+        self.app.thread(self.downloadMetaData)
+
     def onDownloadOkPressed(self, btn):
         url = self.app.getEntry('MangaURLEntry').strip()
         if len(url) == 0:
@@ -595,10 +653,35 @@ class MangaViewer:
         self.app.showSubWindow('DownloadProgress')
 
         self.isDownloading = True
-        self.app.thread(self.downloadComic)
+        # self.app.thread(self.downloadComic)
+        self.app.thread(self.downloadComicMultiThread)
+
+    def monitorThreadsProgress(self):
+        n = len(self.mangaList)
+        while True:
+            mriProg = self.mriProgress.get()
+            webpProg = self.webpProgress.get()
+            pngProg = self.pngProgress.get()
+            # print(n, mriProg, webpProg, pngProg)
+
+            self.setDPMsg(3, self.app.translate('DownloadMRIMsg', 'Downloading MRI data: {0} / {1}').format(mriProg, n))
+            self.setDPMsg(4, self.app.translate('ParseMRIMsg', 'Parsing MRI data: {0} / {1}').format(webpProg, n))
+            self.setDPMsg(5, self.app.translate('ConvertPNGMsg', 'Convert to PNG: {0} / {1}').format(pngProg, n))
+            if mriProg >= n and webpProg >= n and pngProg >= n:
+                self.setDPMsg(3,
+                              self.app.translate('DownloadMRIMsg', 'Downloading MRI data: {0} / {1}').format(mriProg, n)
+                              + self.app.translate('DoneMsg', ". Done."))
+                self.setDPMsg(4,
+                              self.app.translate('ParseMRIMsg', 'Parsing MRI data: {0} / {1}').format(webpProg, n)
+                              + self.app.translate('DoneMsg', ". Done."))
+                self.setDPMsg(5,
+                              self.app.translate('ConvertPNGMsg', 'Convert to PNG: {0} / {1}').format(pngProg, n)
+                              + self.app.translate('DoneMsg', ". Done."))
+                break
+            time.sleep(1)
 
     def setDPMsg(self, position, content):
-        if position not in [1, 2, 3]:
+        if position not in [1, 2, 3, 4, 5]:
             print(content)
         else:
             msgTitle = 'DPDownloadMsg' + str(position)
@@ -696,6 +779,117 @@ class MangaViewer:
         self.setDPMsg(3, 'Image processing: Get comic of chapter %s finished.' % (chapterId))
         self.app.setButton('DPBtn', 'Close')
 
+    def downloadMetaData(self):
+        directory = self.downloadParam['directory']
+        chapterId = self.downloadParam['chapterId']
+        seriesId = self.downloadParam['seriesId']
+
+        if not self.isDownloading and not self.isMetaReloading:
+            return
+
+        if not os.path.exists(directory):
+            self.setDPMsg(1, 'Directory %s not exists, so created...' % directory)
+            try:
+                os.mkdir(directory)
+            except OSError:
+                self.setDPMsg(1, "Creation of the directory failed")
+            else:
+                self.setDPMsg(1, "Successfully created the directory")
+
+        mr = MangaRock()
+        metaObj = mr.getSeriesInfo(seriesId)
+
+        isValid = False
+        for i, info in enumerate(metaObj['chapters']):
+            if info['oid'] == 'mrs-chapter-' + str(chapterId):
+                metaObj['current_chapter'] = i + 1
+                isValid = True
+                break
+
+        if not self.isDownloading and not self.isMetaReloading:
+            return
+
+        if not isValid:
+            self.setDPMsg(2, 'Meta data: Invalid URL, this series does not have specific chapter.')
+            return
+
+        mriList = mr.getMRIListByChapter(chapterId)
+        metaObj['manga_images'] = ['ch' + str(chapterId) + '_' + str(i + 1) + '.png'
+                                   for i in range(len(mriList))]
+        self.setDPMsg(2, 'Meta data: Get chapter data, Done')
+
+        if not self.isDownloading and not self.isMetaReloading:
+            return
+        self.setDPMsg(2, 'Meta data: Write meta data...')
+        with open(os.path.join(directory, 'meta.json'), 'w') as f:
+            json.dump(metaObj, f)
+        self.setDPMsg(2, 'Meta data: Write meta data, Done.')
+        if self.isMetaReloading:
+            self.isMetaReloading = False
+            self.app.queueFunction(self.app.setStatusbar,
+                                   self.app.translate('RefreshMetaMsg')+self.app.translate('DoneMsg'),
+                                   5)
+            self.loadMangaMeta()
+        return metaObj, mriList
+
+    def downloadComicMultiThread(self):
+        url = self.downloadParam['url']
+        directory = self.downloadParam['directory']
+        chapterId = self.downloadParam['chapterId']
+        seriesId = self.downloadParam['seriesId']
+
+        if not self.isDownloading:
+            return
+
+        if not os.path.exists(directory):
+            self.setDPMsg(1, 'Directory %s not exists, so created...' % directory)
+            try:
+                os.mkdir(directory)
+            except OSError:
+                self.setDPMsg(1, "Creation of the directory failed")
+            else:
+                self.setDPMsg(1, "Successfully created the directory")
+
+        metaObj, mriList = self.downloadMetaData()
+
+        jobQueue = Queue()
+        mriQueue = Queue()
+        webpQueue = Queue()
+        tempFileQueue = Queue()
+        self.mangaList = metaObj['manga_images']
+        self.app.thread(self.monitorThreadsProgress)
+        for i, mri in enumerate(mriList):
+            mriFile = os.path.join(directory, 'ch%s_%d.mri' % (chapterId, i + 1))
+            webpFile = os.path.join(directory, 'ch%s_%d.webp' % (chapterId, i + 1))
+            pngFile = os.path.join(directory, 'ch%s_%d.png' % (chapterId, i + 1))
+            jobQueue.put((mri, mriFile, webpFile, pngFile))
+
+        mriThread = MRIThread(1, jobQueue, mriQueue, gui=self)
+        mriThread1 = MRIThread(2, jobQueue, mriQueue, gui=self)
+        parseMRIThread = ParseMRIThread(1, mriQueue, webpQueue, tempFileQueue=tempFileQueue, gui=self)
+        pngThread = PNGThread(1, webpQueue, tempFileQueue=tempFileQueue, gui=self)
+        pngThread1 = PNGThread(2, webpQueue, tempFileQueue=tempFileQueue, gui=self)
+        mriThread.start()
+        time.sleep(1)
+        mriThread1.start()
+        parseMRIThread.start()
+        pngThread.start()
+        time.sleep(1)
+        pngThread1.start()
+
+        tempFileThread = TempFileThread(1, tempFileQueue)
+        tempFileThread.start()
+        self.threads = [mriThread, mriThread1, parseMRIThread, pngThread, pngThread1, tempFileThread]
+
+        tempFileThread.join()
+        self.isDownloading = False
+        self.mangaPath = directory
+        self.mangaMeta = metaObj
+        # self.mangaList = metaObj['manga_images']
+        self.setDPMsg(3, 'Image processing: Get comic of chapter %s finished.' % (chapterId))
+        self.app.setButton('DPBtn', 'Close')
+        print('Get comic of chapter %s finished.' % chapterId)
+
     def onDownloadCancelPressed(self, btn):
         self.app.hideSubWindow('Download')
 
@@ -704,7 +898,8 @@ class MangaViewer:
             # Force Quit is clicked
             if self.app.yesNoBox('Warning', 'Do you want to quit?'):
                 self.isDownloading = False
-                print(self.isDownloading)
+                for th in self.threads:
+                    th.stop()
             else:
                 return
         else:
