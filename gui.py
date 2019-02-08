@@ -451,10 +451,11 @@ class MangaViewer:
             return
         self.loadMangaDir()
 
-    def updateNameMsg(self, aliasList):
-        aliasStr = ''
+    def updateNameMsg(self, name, aliasList):
+        aliasStr = name+'\n'
         for i, alias in enumerate(aliasList):
-            aliasStr += alias.strip() + '\n'
+            if alias != name:
+                aliasStr += alias.strip() + '\n'
         aliasStr = aliasStr[:-1]
         self.app.setMessage('NameMsg', aliasStr)
 
@@ -465,7 +466,9 @@ class MangaViewer:
         self.app.setMessage('ChapterMsg', totalChapter)
 
     def updateStateMsg(self, isCompleted):
-        self.app.setMessage('StateMsg', "Completed" if isCompleted else "Ongoing")
+        self.app.setMessage('StateMsg',
+                            self.app.translate('CompletedMsg', "Completed")
+                            if isCompleted else self.app.translate('OngoingMsg', "Ongoing"))
 
     def updateLastUpdatedMsg(self, lastUpdated):
         lastUpdatedStr = datetime.utcfromtimestamp(lastUpdated).strftime('%Y-%m-%d %H:%M:%S')
@@ -484,6 +487,7 @@ class MangaViewer:
     def loadMangaDir(self):
         self.app.setToolbarButtonEnabled("ZOOM-IN")
         self.app.setToolbarButtonEnabled("ZOOM-OUT")
+        self.app.setToolbarButtonEnabled("REFRESH")
         self.app.setToolbarButtonEnabled("MD-REPEAT")
         self.app.setToolbarButtonEnabled("ARROW-1-LEFT")
         self.app.setToolbarButtonEnabled("ARROW-1-RIGHT")
@@ -540,7 +544,7 @@ class MangaViewer:
 
         self.mangaMeta = metaObj
 
-        self.updateNameMsg(metaObj['alias'])
+        self.updateNameMsg(metaObj['name'], metaObj['alias'])
         self.updateAuthorMsg(metaObj['author'])
         self.updateChapterMsg(metaObj['total_chapters'])
         self.updateStateMsg(metaObj['completed'])
@@ -617,9 +621,6 @@ class MangaViewer:
         self.app.showSubWindow('Download')
 
     def onReloadMetaPressed(self):
-        print(self.mangaList)
-        print(self.mangaMeta)
-        print(self.mangaPath)
         if self.mangaMeta is None or len(self.mangaList) == 0:
             return
         chapterId = self.mangaMeta['chapters'][self.mangaMeta['current_chapter']-1]['oid']
@@ -886,7 +887,7 @@ class MangaViewer:
         self.mangaPath = directory
         self.mangaMeta = metaObj
         # self.mangaList = metaObj['manga_images']
-        self.setDPMsg(3, 'Image processing: Get comic of chapter %s finished.' % (chapterId))
+        # self.setDPMsg(3, 'Image processing: Get comic of chapter %s finished.' % (chapterId))
         self.app.setButton('DPBtn', 'Close')
         print('Get comic of chapter %s finished.' % chapterId)
 
