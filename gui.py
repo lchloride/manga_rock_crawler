@@ -452,7 +452,7 @@ class MangaViewer:
         self.loadMangaDir()
 
     def updateNameMsg(self, name, aliasList):
-        aliasStr = name+'\n'
+        aliasStr = name + '\n'
         for i, alias in enumerate(aliasList):
             if alias != name:
                 aliasStr += alias.strip() + '\n'
@@ -623,10 +623,10 @@ class MangaViewer:
     def onReloadMetaPressed(self):
         if self.mangaMeta is None or len(self.mangaList) == 0:
             return
-        chapterId = self.mangaMeta['chapters'][self.mangaMeta['current_chapter']-1]['oid']
-        chapterId = chapterId[chapterId.rfind('-')+1:]
+        chapterId = self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['oid']
+        chapterId = chapterId[chapterId.rfind('-') + 1:]
         seriesId = self.mangaMeta['oid']
-        seriesId = seriesId[seriesId.rfind('-')+1:]
+        seriesId = seriesId[seriesId.rfind('-') + 1:]
         self.downloadParam = {'url': '',
                               'chapterId': chapterId,
                               'seriesId': seriesId, 'directory': self.mangaPath}
@@ -828,7 +828,7 @@ class MangaViewer:
         if self.isMetaReloading:
             self.isMetaReloading = False
             self.app.queueFunction(self.app.setStatusbar,
-                                   self.app.translate('RefreshMetaMsg')+self.app.translate('DoneMsg'),
+                                   self.app.translate('RefreshMetaMsg') + self.app.translate('DoneMsg'),
                                    5)
             self.loadMangaMeta()
         return metaObj, mriList
@@ -852,6 +852,13 @@ class MangaViewer:
                 self.setDPMsg(1, "Successfully created the directory")
 
         metaObj, mriList = self.downloadMetaData()
+
+        if 14 in metaObj['categories'] and not self.app.questionBox('Age Confirmation',
+                                    'This manga contains materials that might not be suitable to '
+                                    'children under 17. By proceeding, you are confirming that you are '
+                                    '17 or older.'):
+            self.onDPBtnPressed(None)
+            return
 
         jobQueue = Queue()
         mriQueue = Queue()
