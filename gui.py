@@ -6,6 +6,7 @@ import os
 import time
 import codecs
 from main import *
+from data import *
 from multiprocessing import Queue
 
 
@@ -353,7 +354,7 @@ class MangaViewer:
         # DownloadProgress dialog
         app.startSubWindow("DownloadProgress", modal=True)
         app.setFg('black')
-        app.setSize(480, 200)
+        app.setSize(480, 300)
         app.setSticky('W')
         app.setFont(14)
         app.setPadX(10)
@@ -387,27 +388,55 @@ class MangaViewer:
 
         app.addLabel("MangaURLL", "Manga URL")
         app.addEntry("MangaURLEntry", row=0, column=1)
+        app.addNamedCheckBox('Use auto-download directory', 'AutoDownloadCB', colspan=2)
         app.addLabel('DirectoryL', 'Directory')
-        app.addDirectoryEntry("DirectoryEntry", row=1, column=1)
+        app.addDirectoryEntry("DirectoryEntry", row=2, column=1)
+
+        app.setCheckBoxChangeFunction('AutoDownloadCB', self.onAutoDownloadDirChanged)
+        app.setLabelWidth('MangaURLL', 9)
+        app.setLabelWidth('DirectoryL', 9)
+        app.setEntryWidth('MangaURLEntry', 40)
+        app.setEntryWidth('DirectoryEntry', 30)
         app.setFocus("MangaURLEntry")
 
         # set the button's name to match the SubWindow's name
-        app.addNamedButton("Cancel", "DownloadCancel", self.onDownloadCancelPressed, 2, 0, 1)
-        app.addNamedButton("OK", "DownloadOk", self.onDownloadOkPressed, 2, 1, 1)
+        app.addNamedButton("Cancel", "DownloadCancel", self.onDownloadCancelPressed, 4, 0, 1)
+        app.addNamedButton("OK", "DownloadOk", self.onDownloadOkPressed, 4, 1, 1)
+        app.setButtonWidth('DownloadCancel', 6)
+        app.setButtonWidth('DownloadOk', 6)
         app.stopSubWindow()
 
         # Setting dialog
         app.startSubWindow("Setting", modal=True)
         app.setFg('black')
-        app.setSize(480, 200)
+        app.setSize(480, 350)
         app.setSticky('NW')
         app.setFont(14)
         app.setPadX(10)
         app.setPadY(10)
 
-        app.startLabelFrame("Language")
+        app.startLabelFrame("LanguageLF", name='Language')
         app.addRadioButton("lang", "ENGLISH")
         app.addRadioButton("lang", "简体中文")
+        app.stopLabelFrame()
+
+        app.startLabelFrame("AutoLF", name='Auto Downloading')
+        app.addNamedCheckBox("Enable auto downloading", "AutoCheckBox")
+        app.addLabel('DirectoryL2', row=1, column=0)
+        app.addDirectoryEntry('AutoDownloadDir', row=1, column=1)
+        app.addLabel('NamingFormatL', row=2, column=0)
+        app.addEntry('NamingEntry', row=2, column=1)
+        app.setEntryWidth('NamingEntry', 30)
+        app.addLabel('DirLabelsL', row=3, column=0)
+        app.addButtons([['%MangaName%', '%Order%'],
+                        ['%ChapterTitle%', '%DateTime%']], self.onLabelBtnPressed, 3, 1)
+        app.setButtonOverFunction('%MangaName%', self.displayLabelExample)
+        app.setButtonOverFunction('%Order%', self.displayLabelExample)
+        app.setButtonOverFunction('%ChapterTitle%', self.displayLabelExample)
+        app.setButtonOverFunction('%DateTime%', self.displayLabelExample)
+        app.addLabel('LabelExampleL', '', row=4, colspan=2)
+        app.addMessage('AutoDownloadIntro', row=5, colspan=2)
+        app.setMessageWidth('AutoDownloadIntro', 450)
         app.stopLabelFrame()
 
         # set the button's name to match the SubWindow's name
@@ -436,6 +465,24 @@ class MangaViewer:
         else:
             self.language = language
         self.app.go(self.language)
+
+    def displayLabelExample(self, btn):
+        if btn == '%MangaName%':
+            self.app.setLabel('LabelExampleL',
+                              self.app.translate('MangaNameEx', '%MangaName%: Mange name(Domestic Girlfriend)'))
+        elif btn == '%Order%':
+            self.app.setLabel('LabelExampleL',
+                              self.app.translate('OrderEx', '%Order%: Order in chapter list(1)'))
+        elif btn == '%ChapterTitle%':
+            self.app.setLabel('LabelExampleL',
+                              self.app.translate('ChapterTitleEx', '%ChapterTitle%: Chapter title(Vol.1 Chapter 1: I Want To Grow Up Soon)'))
+        elif btn == '%DateTime%':
+            self.app.setLabel('LabelExampleL',
+                              self.app.translate('DateTimeEx', '%DateTime%: Current date&time(20190101123456)'))
+
+    def onLabelBtnPressed(self, btn):
+        entry = self.app.getEntry('NamingEntry')
+        self.app.setEntry('NamingEntry', entry+btn)
 
     def onSettingCancelPressed(self):
         self.app.hideSubWindow('Setting')
@@ -590,6 +637,8 @@ class MangaViewer:
                                           len(self.mangaMeta['manga_images'])))
             if page is not None and 0 < page <= len(self.mangaMeta['manga_images']):
                 break
+            elif page is None:
+                return
             else:
                 isFirst = False
         self.currPage = page - 1
@@ -616,9 +665,43 @@ class MangaViewer:
     def openSettingWindow(self):
         self.app.showSubWindow('Setting')
         self.app.setRadioButton('lang', self.getSetting('lang'))
+        self.app.setCheckBox('AutoCheckBox', ticked=self.getSetting('auto_download'))
+        self.app.setEntry('AutoDownloadDir', self.getSetting('auto_download_dir'))
+        self.app.setEntry('NamingEntry', self.getSetting('auto_download_naming'))
 
     def openDownloadWindow(self):
+        if self.getSetting('auto_download'):
+            self.app.setCheckBox('AutoDownloadCB', ticked=True)
+            self.app.setLabelState('DirectoryL', 'disabled')
+            self.app.setCheckBoxState('AutoDownloadCB', 'normal')
+            self.app.setEntryState('DirectoryEntry', 'disabled')
+        else:
+            self.app.setCheckBox('AutoDownloadCB', ticked=False)
+            self.app.setLabelState('')
+            self.app.setLabelState('DirectoryL', 'normal')
+            self.app.setCheckBoxState('AutoDownloadCB', 'disabled')
+            self.app.setEntryState('DirectoryEntry', 'normal')
         self.app.showSubWindow('Download')
+
+    def onAutoDownloadDirChanged(self, event):
+        if self.app.getCheckBox('AutoDownloadCB'):
+            self.app.setLabelState('DirectoryL', 'disabled')
+            self.app.setCheckBoxState('AutoDownloadCB', 'normal')
+            self.app.setEntryState('DirectoryEntry', 'disabled')
+        else:
+            self.app.setLabelState('DirectoryL', 'normal')
+            # self.app.setCheckBoxState('AutoDownloadCB', 'disabled')
+            self.app.setEntryState('DirectoryEntry', 'normal')
+
+    def generateAutoDownloadDir(self):
+        dirFormat = self.getSetting('auto_download_naming')
+        dirFormat = dirFormat.replace('%MangaName%', self.mangaMeta['name'])
+        dirFormat = dirFormat.replace('%Order%', str(self.mangaMeta['current_chapter']))
+        dirFormat = dirFormat.replace('%ChapterTitle%',
+                                      self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['name'])
+        curTime = datetime.now().strftime('%Y%m%d%H%M%S')
+        dirFormat = dirFormat.replace('%DateTime%', curTime)
+        return dirFormat
 
     def onReloadMetaPressed(self):
         if self.mangaMeta is None or len(self.mangaList) == 0:
@@ -635,16 +718,22 @@ class MangaViewer:
         self.app.thread(self.downloadMetaData)
 
     def onDownloadOkPressed(self, btn):
+        self.mriProgress.set(0)
+        self.webpProgress.set(0)
+        self.pngProgress.set(0)
         url = self.app.getEntry('MangaURLEntry').strip()
         if len(url) == 0:
             self.app.errorBox('Error', 'URL cannot be empty')
             return
         url = url[:url.rfind('?')] if url.rfind('?') != -1 else url
         url = url[:-1] if url.endswith('/') else url
-        directory = self.app.getEntry('DirectoryEntry')
-        if len(directory) == 0:
-            self.app.errorBox('Error', 'Directory cannot be empty')
-            return
+        # directory is None means auto download
+        directory = None
+        if not self.app.getCheckBox('AutoDownloadCB'):
+            directory = self.app.getEntry('DirectoryEntry')
+            if directory is None or len(directory) == 0:
+                self.app.errorBox('Error', 'Directory cannot be empty')
+                return
         chapterId = url[url.rfind('mrs-chapter-') + len('mrs-chapter-'):]
         seriesId = url[url.rfind('mrs-serie-') + len('mrs-serie-'):url.rfind('/chapter')]
         self.downloadParam = {'url': url, 'chapterId': chapterId,
@@ -688,6 +777,7 @@ class MangaViewer:
             msgTitle = 'DPDownloadMsg' + str(position)
             self.app.queueFunction(self.app.setMessage, msgTitle, content)
 
+    # This method downloads manga with paralleling which is not fast enough
     def downloadComic(self):
         url = self.downloadParam['url']
         directory = self.downloadParam['directory']
@@ -780,6 +870,33 @@ class MangaViewer:
         self.setDPMsg(3, 'Image processing: Get comic of chapter %s finished.' % (chapterId))
         self.app.setButton('DPBtn', 'Close')
 
+    def writeMetaJSON(self, directory, metaObj):
+        self.setDPMsg(2, self.app.translate('MetaWritingMsg',
+                                            'Meta data: Write meta data...'))
+        with open(os.path.join(directory, 'meta.json'), 'w') as f:
+            json.dump(metaObj, f)
+        self.setDPMsg(2, self.app.translate('MetaWriteDoneMsg',
+                                            'Meta data: Write meta data, Done.'))
+
+    def updateDatabase(self, chapterId, seriesId, directory, metaObj):
+        current_time = int(time.time())
+        dm = DataManager(os.path.join(self.getSetting('auto_download_dir'), 'data.db'))
+        chapter = Chapter(None, int(chapterId), int(seriesId), directory, current_time,
+                          current_time, metaObj['chapters'][metaObj['current_chapter']]['name'],
+                          metaObj['chapters'][metaObj['current_chapter']]['updatedAt'])
+        series = Series(None, seriesId, current_time, json.dumps(metaObj, ensure_ascii=False))
+        if self.isDownloading and dm.selectChapterByChapterId(chapterId) is None:
+            # Insert to database
+            dm.insertChapter(chapter)
+        else:
+            # Update existed record
+            dm.updateChapter(chapter)
+
+        if self.isDownloading and dm.selectSeriesBySeriesId(seriesId) is None:
+            dm.insertSeries(series)
+        else:
+            dm.updateSeries(series)
+
     def downloadMetaData(self):
         directory = self.downloadParam['directory']
         chapterId = self.downloadParam['chapterId']
@@ -787,15 +904,6 @@ class MangaViewer:
 
         if not self.isDownloading and not self.isMetaReloading:
             return
-
-        if not os.path.exists(directory):
-            self.setDPMsg(1, 'Directory %s not exists, so created...' % directory)
-            try:
-                os.mkdir(directory)
-            except OSError:
-                self.setDPMsg(1, "Creation of the directory failed")
-            else:
-                self.setDPMsg(1, "Successfully created the directory")
 
         mr = MangaRock()
         metaObj = mr.getSeriesInfo(seriesId)
@@ -811,27 +919,46 @@ class MangaViewer:
             return
 
         if not isValid:
-            self.setDPMsg(2, 'Meta data: Invalid URL, this series does not have specific chapter.')
+            self.setDPMsg(2, self.app.translate('InvalidURLMsg',
+                                                'Meta data: Invalid URL, this series does not have specific chapter.'))
             return
 
         mriList = mr.getMRIListByChapter(chapterId)
         metaObj['manga_images'] = ['ch' + str(chapterId) + '_' + str(i + 1) + '.png'
                                    for i in range(len(mriList))]
-        self.setDPMsg(2, 'Meta data: Get chapter data, Done')
+        self.setDPMsg(2, self.app.translate('MetaDoneMsg',
+                                            'Meta data: Get chapter data, Done'))
 
         if not self.isDownloading and not self.isMetaReloading:
             return
-        self.setDPMsg(2, 'Meta data: Write meta data...')
-        with open(os.path.join(directory, 'meta.json'), 'w') as f:
-            json.dump(metaObj, f)
-        self.setDPMsg(2, 'Meta data: Write meta data, Done.')
+        if directory is not None:
+            self.writeMetaJSON(directory, metaObj)
+
         if self.isMetaReloading:
             self.isMetaReloading = False
             self.app.queueFunction(self.app.setStatusbar,
                                    self.app.translate('RefreshMetaMsg') + self.app.translate('DoneMsg'),
                                    5)
             self.loadMangaMeta()
+
+        if self.getSetting('auto_download'):
+            self.updateDatabase(chapterId, seriesId, directory, metaObj)
+
         return metaObj, mriList
+
+    def createDir(self, directory):
+        if not os.path.exists(directory):
+            self.setDPMsg(1,
+                          self.app.translate('DirectoryCreateMsg',
+                                             'Directory {0} not exists, so created...').format(directory))
+            try:
+                os.mkdir(directory)
+            except OSError:
+                self.setDPMsg(1, self.app.translate('DirectoryCreateFailedMsg',
+                                                    "Creation of the directory failed"))
+            else:
+                self.setDPMsg(1, self.app.translate('DirectoryCreatedMsg',
+                                                    "Successfully created the directory"))
 
     def downloadComicMultiThread(self):
         url = self.downloadParam['url']
@@ -842,21 +969,30 @@ class MangaViewer:
         if not self.isDownloading:
             return
 
-        if not os.path.exists(directory):
-            self.setDPMsg(1, 'Directory %s not exists, so created...' % directory)
-            try:
-                os.mkdir(directory)
-            except OSError:
-                self.setDPMsg(1, "Creation of the directory failed")
-            else:
-                self.setDPMsg(1, "Successfully created the directory")
+        # If directory is not None, auto-downloading is not used
+        # Create directory if not exists
+        if directory is not None:
+            self.createDir(directory)
+
+        if not self.isDownloading:
+            return
 
         metaObj, mriList = self.downloadMetaData()
+        self.mangaMeta = metaObj
+        # Auto-downloading is used, directory is based on metaObj
+        if directory is None:
+            folder = self.generateAutoDownloadDir()
+            print(folder)
+            directory = os.path.join(self.getSetting('auto_download_dir'), folder)
+            self.createDir(directory)
+            self.writeMetaJSON(directory, metaObj)
+            self.updateDatabase(chapterId, seriesId, directory, metaObj)
 
-        if 14 in metaObj['categories'] and not self.app.questionBox('Age Confirmation',
-                                    'This manga contains materials that might not be suitable to '
-                                    'children under 17. By proceeding, you are confirming that you are '
-                                    '17 or older.'):
+        self.mangaPath = directory
+
+        if 14 in metaObj['categories'] and \
+                not self.app.questionBox(self.app.translate('AgeConfirmationTitle'),
+                                         self.app.translate('AgeConfirmationBox')):
             self.onDPBtnPressed(None)
             return
 
@@ -891,8 +1027,7 @@ class MangaViewer:
 
         tempFileThread.join()
         self.isDownloading = False
-        self.mangaPath = directory
-        self.mangaMeta = metaObj
+
         # self.mangaList = metaObj['manga_images']
         # self.setDPMsg(3, 'Image processing: Get comic of chapter %s finished.' % (chapterId))
         self.app.setButton('DPBtn', 'Close')
@@ -916,9 +1051,9 @@ class MangaViewer:
             self.loadMangaDir()
         self.app.hideSubWindow('DownloadProgress')
 
-    def writeDownloadMsg(self, message):
-        message0 = self.app.getMessage('DPDownloadMsg')
-        self.app.setMessage('DPDownloadMsg', message0 + '\n' + message0)
+    # def writeDownloadMsg(self, message):
+    #     message0 = self.app.getMessage('DPDownloadMsg')
+    #     self.app.setMessage('DPDownloadMsg', message0 + '\n' + message0)
 
     def onZoomInBtnPressed(self, btn):
         if self.zoomLevel <= 10:
@@ -957,6 +1092,14 @@ class MangaViewer:
     def onSettingUpdateBtnPressed(self, btn):
         self.language = self.app.getRadioButton('lang')
         self.putSetting('lang', self.language)
+        self.putSetting('auto_download', self.app.getCheckBox('AutoCheckBox'))
+        self.putSetting('auto_download_dir', self.app.getEntry('AutoDownloadDir'))
+        self.putSetting('auto_download_naming', self.app.getEntry('NamingEntry'))
+        if self.getSetting('auto_download') and \
+                (self.getSetting('auto_download_dir') == "" or
+                 self.getSetting('auto_download_naming') == ""):
+            self.app.errorBox('Error', 'Directory and Naming format must be filled!')
+            return
         self.writeSettings()
         self.app.hideSubWindow('Setting')
         self.app.changeLanguage(self.language)
