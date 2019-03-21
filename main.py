@@ -4,6 +4,8 @@ import os
 import threading
 from multiprocessing import Queue
 import time
+import codecs
+import math
 
 
 class MRIThread(threading.Thread):
@@ -151,6 +153,7 @@ class ParseMRIThread(threading.Thread):
     def stop(self):
         self.stopFlag = True
 
+
 class PNGThread(threading.Thread):
     def __init__(self, threadID, inQueue, outQueue=None, tempFileQueue=None, gui=None):
         threading.Thread.__init__(self)
@@ -208,6 +211,7 @@ class PNGThread(threading.Thread):
     def stop(self):
         self.stopFlag = True
 
+
 class TempFileThread(threading.Thread):
     def __init__(self, threadID, tempFileQueue):
         threading.Thread.__init__(self)
@@ -231,6 +235,250 @@ class TempFileThread(threading.Thread):
 
     def stop(self):
         self.stopFlag = True
+
+
+class MangaName:
+    def __init__(self):
+        self.posFactor = lambda idx: math.log(idx, 3)+1
+        self.negFactor = lambda idx: idx ** 0.5
+        # self.posFactor = lambda idx: idx ** 0.5
+        # self.negFactor = lambda idx: idx ** 0.5
+
+    def checkKorean(self, name):
+        for ch in name:
+            code = ord(ch)
+            if 0x1100 <= code <= 0x11ff or 0x3130 <= code <= 0x318f or 0xa960 <= code <= 0xa97f:
+                return True
+        return False
+
+    def checkJPKana(self, name):
+        for ch in name:
+            code = ord(ch)
+            if 0x3040 <= code <= 0x30ff or 0x31f0 <= code <= 0x31ff or 0x3190 <= code <= 0x319f:
+                return True
+        return False
+
+    def checkPureHanzi(self, name):
+        if self.checkJPKana(name) or self.checkKorean(name):
+            return False
+        for ch in name:
+            code = ord(ch)
+            if 0x4e00 <= code <= 0x9fff or 0x3400 <= code <= 0x4dbf or \
+                0x20000 <= code <= 0x2a6df or 0x2b740 <= code <= 0x2ceaf or 0xf900 <= code <= 0xfaff or \
+                0x2f800 <= code <= 0x2fa1f:
+                return True
+        return False
+
+    def divideRomaji(self, pinyin):
+        pinyinList = []
+        path = []
+        with codecs.open('kana.json', 'r', 'utf-8') as f:
+            data0 = json.load(f, encoding='utf-8')
+        data = list(data0.keys())
+        word = pinyin.lower().split(' ')
+        for w in word:
+            pyList = []
+            self.dividePinyinR(w, data, path, pyList)
+            if len(pyList) == 0:
+                pyList = [w]
+            pinyinList.append(pyList)
+        return pinyinList
+
+    def divideRomajiOld(self, romaji):
+        tangoList = []
+        temp = ''
+        vol = lambda x: x in ['a', 'i', 'u', 'e', 'o', 'ō', 'ā', 'ē', 'ū', 'ī']
+        con = lambda x: ord('a') <= ord(x) <= ord('z') and x not in ['a', 'i', 'u', 'e', 'o']
+        you = lambda x: x in ['k', 'n', 'h', 'm', 'r', 'g', 'j', 'b', 'p']
+        romaji = romaji.lower()
+        word = romaji.split(' ')
+        for w in word:
+            for ch in w:
+                if not (ord('a') <= ord(ch) <= ord('z')):
+                    continue
+                # print(temp, (temp[-1] if len(temp) > 0 else ''), ch)
+                if len(temp) == 0:
+                    temp += ch
+                elif vol(temp[-1]) or temp == 'n':
+                    tangoList.append(temp)
+                    temp = ch
+                elif con(temp[-1]):
+                    if temp in ['sh', 'ch'] and not vol(ch):
+                        tangoList.append(temp[0])
+                        temp = temp[1]
+                    if temp == 'ts' and ch != 'u':
+                        tangoList.append(temp[0])
+                        temp = temp[1]
+                    if you(temp[-1]) and ch == 'y':
+                        temp += ch
+                    elif temp[-1] == ch:
+                        temp += ch
+                    elif temp[-1] == 't' and ch == 's':
+                        temp += ch
+                    elif temp[-1] in ['s', 'c'] and ch == 'h':
+                        temp += ch
+                    elif vol(ch):
+                        temp += ch
+                    else:
+                        tangoList.append(temp)
+                        temp = ch
+                else:
+                    tangoList.append(temp)
+                    temp = ch
+            tangoList.append(temp)
+            temp = ''
+        return tangoList
+
+    def matchPinyin(self, name):
+        div = self.dividePinyin(name)
+        s = ''
+        for w in div:
+            minLen = 1000
+            minDiv = []
+            for d in w:
+                if len(d) < minLen:
+                    minDiv = d
+                    minLen = len(d)
+            for yj in minDiv:
+                s += yj + ' '
+        # print(s)
+        return self.matchPinyinYinJie(s)
+
+    def matchPinyinYinJie(self, name):
+        with codecs.open('pinyin1.json', 'r', 'utf-8') as f:
+            data = json.load(f, encoding='utf-8')
+        name = name.lower()
+        word = name.strip().split(' ')
+        score = 0
+        idx = 1
+        inc = True
+        for w in word:
+            # print(score, w, inc, idx)
+            if w in data:
+                if not inc:
+                    idx = 1
+                    inc = True
+                score += (data[w]+0.5) * self.posFactor(idx)
+                idx += 1
+            else:
+                if inc:
+                    idx = 1
+                    inc = False
+                score -= self.negFactor(idx)
+                idx += 1
+        # print(score, len(word))
+        return score / len(word)
+
+    def dividePinyin(self, pinyin):
+        pinyinList = []
+        path = []
+        with codecs.open('pinyin.json', 'r', 'utf-8') as f:
+            data = json.load(f, encoding='utf-8')
+        word = pinyin.lower().split(' ')
+        for w in word:
+            pyList = []
+            self.dividePinyinR(w, data, path, pyList)
+            if len(pyList) == 0:
+                pyList = [w]
+            pinyinList.append(pyList)
+        return pinyinList
+
+    def dividePinyinR(self, pinyin, data, path, result):
+        if len(pinyin) == 0:
+            result.append(list(path))
+            return
+        for py in data:
+            if pinyin.startswith(py):
+                # print(pinyin, py)
+                path.append(py)
+                pinyin1 = pinyin[len(py):]
+                self.dividePinyinR(pinyin1, data, path, result)
+                path.pop()
+
+
+    def matchKana(self, romaji):
+        with codecs.open('kana.json', 'r', 'utf-8') as f:
+            data = json.load(f, encoding='utf-8')
+        div = self.divideRomaji(romaji)
+        s = ''
+        for w in div:
+            minLen = 1000
+            minDiv = []
+            for d in w:
+                if len(d) < minLen:
+                    minDiv = d
+                    minLen = len(d)
+            for yj in minDiv:
+                s += yj + ' '
+        rList = s.strip().split(' ')
+        score = 0
+        idx = 1
+        inc = True
+        for r in rList:
+            if len(r) >= 2 and r[0] == r[1]:
+                r = r[1:]
+            # print(score, r, inc, idx)
+            if r in data:
+                if not inc:
+                    idx = 1
+                    inc = True
+                score += (data[r]+0.5) * self.posFactor(idx)
+                idx += 1
+            else:
+                if inc:
+                    idx = 1
+                    inc = False
+                score -= self.negFactor(idx)
+                idx += 1
+        # print(score, len(rList))
+        return score / len(rList)
+
+    def checkJPCN(self, nameList):
+        isJK = False
+        isCN = False
+        cnName = '--'
+        jpName = '--'
+        newNameList = []
+        for name in nameList:
+            newNameList += name.split(';')
+        for name in newNameList:
+            if self.checkPureHanzi(name):
+                isCN = True
+                cnName = name
+            if self.checkJPKana(name):
+                isJK = True
+                jpName = name
+
+        if isJK:
+            return 'JP', jpName
+        elif isCN:
+            highestJP = 0
+            highestCN = 0
+            jpname = ''
+            cnname = ''
+            for name in nameList:
+                jpscore = self.matchKana(name)
+                cnscore = self.matchPinyin(name)
+                if jpscore > 0.5 and jpscore > highestJP:
+                    highestJP = jpscore
+                    jpname = name
+                if cnscore > 0.5 and cnscore > highestCN:
+                    highestCN = cnscore
+                    cnname = name
+
+            if highestCN == 0 and highestJP == 0:
+                s = '--'
+                r = nameList[0]
+            elif highestJP >= highestCN:
+                s = 'JP'
+                r = jpName
+            else:
+                s = 'CN'
+                r = cnName
+            # print(s, cnName, jpName, '|', cnname, highestCN, '|', jpname, highestJP)
+            return s, r
+        else:
+            return '--', nameList[0]
 
 
 class MangaRock:
@@ -295,14 +543,16 @@ class MangaRock:
         r = rs.get('https://api.mangarockhd.com/query/web401/pagesv2?oid=mrs-chapter-%s&country=Japan' % chapterId)
         data = json.loads(r.content)['data']
         mriList = []
+        mriListNoCredit = []
         for item in data:
             mriList.append(item['url'])
+            mriListNoCredit.append(item['url']) if 'role' not in item or item['role'].lower() != 'credit' else None
         print('Done.', len(data), 'items obtained.\n')
-        return mriList
+        return mriList, mriListNoCredit
 
     def getComicByChapter(self, chapterId, folder='./', to_png=True, delete_tempfile=True):
         self.write('Get comic of chapter %s......' % chapterId)
-        mriList = self.getMRIListByChapter(chapterId)
+        mriList, mriListNoCredit = self.getMRIListByChapter(chapterId)
         for i, mri in enumerate(mriList):
             self.write('----------\nProcess image %d / %d' % (i + 1, len(mriList)))
             mriFile = os.path.join(folder, 'ch%s_%d.mri' % (chapterId, i + 1))
@@ -321,7 +571,7 @@ class MangaRock:
 
     def getComicByChapterMultiThread(self, chapterId, folder='./', delete_tempfile=True):
         self.write('Get comic of chapter %s......' % chapterId)
-        mriList = self.getMRIListByChapter(chapterId)
+        mriList, mriListNoCredit = self.getMRIListByChapter(chapterId)
         jobQueue = Queue()
         mriQueue = Queue()
         webpQueue = Queue()
@@ -350,8 +600,21 @@ class MangaRock:
         self.write('Get comic of chapter %s finished.' % chapterId)
 
     def getSeriesInfo(self, seriesId):
-        r = rs.get('https://api.mangarockhd.com/query/web401/info?oid=mrs-serie-%s&last=0&country=Japan'
-                   % seriesId)
+        cnt = 0
+        r = None
+        while cnt < 3:
+            try:
+                r = rs.get('https://api.mangarockhd.com/query/web401/info?oid=mrs-serie-%s&last=0&country=Japan'
+                           % seriesId)
+            except Exception as e:
+                cnt += 1
+                time.sleep(1)
+            else:
+                break
+
+        if r is None or cnt >= 3:
+            return None
+        print(r.text)
         obj = json.loads(r.text)
         if obj['code'] != 0:
             return None
@@ -375,10 +638,26 @@ class MangaRock:
 if __name__ == '__main__':
     mr = MangaRock()
     # mr.getComicByChapter('100399152', folder='./ch100399152')
-    mr.getComicByChapterMultiThread('61805', folder='./ドメスティックな彼女_10')
+    # mr.getComicByChapterMultiThread('61805', folder='./ドメスティックな彼女_10')
     # mriList = mr.getMRIListByChapter('100399152')
 
     # mr.downloadMRI('https://f01.mrcdn.info/file/mrfiles/j/1/a/e/tB.cLwx5xUK.mri') # mriList[2]
     # mr.mri2webp('./tB.cLwx5xUK.mri', './tB.cLwx5xUK.webp')
     # mr.webp2png('./tB.cLwx5xUK.webp')
     # print(mr.getSeriesInfo('61792'))
+
+    mn = MangaName()
+    with codecs.open('namelist.json', 'r', 'utf-8') as f:
+        dataa = json.load(f, encoding='utf-8')
+
+    # print(len(dataa))
+    for key in dataa:
+        print(mn.checkJPCN(dataa[key]))
+    # print(mn.checkPureHanzi('おそ松さん'))
+    nnn = 'Gakuen Raku'
+    print(mn.divideRomaji(nnn))
+    print(mn.dividePinyin(nnn))
+    print(mn.matchKana(nnn))
+    print(mn.matchPinyin(nnn))
+
+

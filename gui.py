@@ -8,6 +8,7 @@ import codecs
 from main import *
 from data import *
 from multiprocessing import Queue
+import textwrap
 
 
 class AtomicInt:
@@ -39,9 +40,9 @@ class AtomicInt:
 
 class MangaViewer:
     def __init__(self, language="ENGLISH"):
-        self.conf = {'width': 900, 'height': 740,
+        self.conf = {'width': 950, 'height': 740,
                      'manga_max_width': 560, 'manga_max_height': 660,
-                     'manga_bg': 'black', 'info_width': 200,
+                     'manga_bg': 'black', 'info_width': 225,
                      }
         self.app = gui("MangaRock Viewer", "%dx%d" % (self.conf['width'], self.conf['height']))
         self.mangaPath = './'
@@ -64,6 +65,8 @@ class MangaViewer:
         self.webpProgress = AtomicInt(0)
         self.pngProgress = AtomicInt(0)
         self.threads = []
+        self.downloadMangaURL = None
+        self.rrFrameHeight = 0
         self.readSettings()
         self.initLang()
         self.__setLayout()
@@ -111,7 +114,7 @@ class MangaViewer:
                                   (self.app.translate("ChapterSB", default="Chapter: "),
                                    self.mangaMeta['current_chapter'], self.mangaMeta['total_chapters']), 0)
             self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
-                                                  len(self.mangaMeta['manga_images'])), 1)
+                                                  len(self.mangaList)), 1)
             try:
                 updatedAt = self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['updatedAt']
                 updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
@@ -172,11 +175,13 @@ class MangaViewer:
         app.setBg(conf['manga_bg'])
         app.setFg('lightgray')
 
-        tools = ["DOWNLOAD", "OPEN", "REFRESH", "MD-PREVIOUS", "MD-NEXT", "MD-REPEAT",
+        tools = ["DOWNLOAD", "OPEN", "REFRESH", "MD-fast-backward-alt", "MD-fast-forward-alt",
+                 "MD-PREVIOUS", "MD-NEXT", "MD-REPEAT",
                  "ZOOM-IN", "ZOOM-OUT",
                  "ARROW-1-LEFT", "ARROW-1-RIGHT", "ARROW-1-UP",
                  "ARROW-1-DOWN", "SETTINGS", "HELP", "ABOUT", "OFF"]
         funcs = [self.openDownloadWindow, self.onOpenToolPressed, self.onReloadMetaPressed,
+                 self.loadPrevChapter, self.loadNextChapter,
                  self.loadPreviousManga, self.loadNextManga, self.jumpMangaPage,
                  self.onZoomInBtnPressed, self.onZoomOutBtnPressed, self.onMoveLeftBtnPressed,
                  self.onMoveRightBtnPressed, self.onMoveUpBtnPressed, self.onMoveDownBtnPressed,
@@ -188,6 +193,8 @@ class MangaViewer:
         # app.setToolbarButtonDisabled("OPEN")
         # app.setToolbarButtonDisabled("DOWNLOAD")
         # app.setToolbarButtonDisabled("REFRESH")
+        app.setToolbarButtonDisabled("MD-fast-backward-alt")
+        app.setToolbarButtonDisabled("MD-fast-forward-alt")
         app.setToolbarButtonDisabled("MD-PREVIOUS")
         app.setToolbarButtonDisabled("MD-NEXT")
         app.setToolbarButtonDisabled("MD-REPEAT")
@@ -220,7 +227,7 @@ class MangaViewer:
         app.setBg('#222222')
         app.startFrame('RR', row=0, column=1)
         app.setSticky("NW")
-        app.setPadX(5)
+        app.setPadX(2)
         app.setFont(13)
 
         app.addLabel('InfoL', 'Information')
@@ -275,11 +282,22 @@ class MangaViewer:
         app.setMessageWidth('LabelMsg', conf['info_width'])
         rowCnt += 1
 
+        app.stopFrame()
+
+        app.startFrame('RRB', row=1, column=1)
+        app.setSticky("NW")
+        app.setPadX(2)
+        app.setFont(13)
+        # app.getFrameWidget('RR').bind('<Configure>', self.modifyIntroHeight)
+
         # Intro
         intro = "N/A"
         app.addLabel('IntroL', 'Introduction:', row=rowCnt, column=0)
         app.addMessage('IntroMsg', intro, row=rowCnt, column=1)
-        app.setMessageWidth('IntroMsg', conf['info_width'])
+        # app.setMessageWidth('IntroMsg', conf['info_width']+5)
+        rowCnt += 1
+        app.addLink('More..', self.loadFullIntro, row=rowCnt, column=1)
+        app.hideLink('More..')
         rowCnt += 1
 
         # Frame ends
@@ -298,10 +316,10 @@ class MangaViewer:
         app.setStatusbar(self.translate("Position LeftSB", "Position Left: ") + "N/A" +
                          self.translate("UpSB", " Up: ") + "N/A", 4)
         app.setStatusbar("", 5)
-        app.setStatusbarWidth(5, 0)
-        app.setStatusbarWidth(5, 1)
-        app.setStatusbarWidth(5, 3)
-        app.setStatusbarWidth(10, 2)
+        app.setStatusbarWidth(3, 0)
+        app.setStatusbarWidth(3, 1)
+        app.setStatusbarWidth(3, 3)
+        app.setStatusbarWidth(15, 2)
         app.setStatusbarWidth(20, 5)
 
         # Help dialog
@@ -354,7 +372,7 @@ class MangaViewer:
         # DownloadProgress dialog
         app.startSubWindow("DownloadProgress", modal=True)
         app.setFg('black')
-        app.setSize(480, 300)
+        app.setSize(480, 250)
         app.setSticky('W')
         app.setFont(14)
         app.setPadX(10)
@@ -409,7 +427,7 @@ class MangaViewer:
         # Setting dialog
         app.startSubWindow("Setting", modal=True)
         app.setFg('black')
-        app.setSize(480, 350)
+        app.setSize(480, 450)
         app.setSticky('NW')
         app.setFont(14)
         app.setPadX(10)
@@ -428,9 +446,11 @@ class MangaViewer:
         app.addEntry('NamingEntry', row=2, column=1)
         app.setEntryWidth('NamingEntry', 30)
         app.addLabel('DirLabelsL', row=3, column=0)
-        app.addButtons([['%MangaName%', '%Order%'],
-                        ['%ChapterTitle%', '%DateTime%']], self.onLabelBtnPressed, 3, 1)
+        app.addButtons([['%MangaName%', '%JPMangaName%'],
+                        ['%Order%', '%DateTime%'],
+                        ['%ChapterTitle%']], self.onLabelBtnPressed, 3, 1)
         app.setButtonOverFunction('%MangaName%', self.displayLabelExample)
+        app.setButtonOverFunction('%JPMangaName%', self.displayLabelExample)
         app.setButtonOverFunction('%Order%', self.displayLabelExample)
         app.setButtonOverFunction('%ChapterTitle%', self.displayLabelExample)
         app.setButtonOverFunction('%DateTime%', self.displayLabelExample)
@@ -439,9 +459,13 @@ class MangaViewer:
         app.setMessageWidth('AutoDownloadIntro', 450)
         app.stopLabelFrame()
 
+        app.startLabelFrame('IgnoreCreditLF', name='Reading')
+        app.addNamedCheckBox('Ignore credit page', 'IgnoreCreditCB')
+        app.stopLabelFrame()
+
         # set the button's name to match the SubWindow's name
         app.addButtons(["Update", "Cancel"],
-                       [self.onSettingUpdateBtnPressed, self.onSettingCancelPressed], 2, 0, 2)
+                       [self.onSettingUpdateBtnPressed, self.onSettingCancelPressed], 3, 0, 2)
         # app.addNamedButton("Cancel", "SettingCancel", app.hideSubWindow, row=2, column=0)
         # app.addNamedButton("OK", "SettingOk", self.onDownloadOkPressed, row=2, column=1)
         app.stopSubWindow()
@@ -455,6 +479,8 @@ class MangaViewer:
         app.bindKey("<w>", self.onMoveUpBtnPressed)
         app.bindKey("<z>", self.onZoomInBtnPressed)
         app.bindKey("<x>", self.onZoomOutBtnPressed)
+        app.bindKey("<Shift-Right>", self.loadNextChapter)
+        app.bindKey("<Shift-Left>", self.loadPrevChapter)
 
     def __defaultCallback(self, name):
         print(name)
@@ -475,14 +501,19 @@ class MangaViewer:
                               self.app.translate('OrderEx', '%Order%: Order in chapter list(1)'))
         elif btn == '%ChapterTitle%':
             self.app.setLabel('LabelExampleL',
-                              self.app.translate('ChapterTitleEx', '%ChapterTitle%: Chapter title(Vol.1 Chapter 1: I Want To Grow Up Soon)'))
+                              self.app.translate('ChapterTitleEx',
+                                                 '%ChapterTitle%: Chapter title(Vol.1 Chapter 1: I Want To Grow Up Soon)'))
         elif btn == '%DateTime%':
             self.app.setLabel('LabelExampleL',
                               self.app.translate('DateTimeEx', '%DateTime%: Current date&time(20190101123456)'))
+        elif btn == '%JPMangaName%':
+            self.app.setLabel('LabelExampleL',
+                              self.app.translate('JPMangaName',
+                                                 '%JPMangaName%: Manga Name in Japanese if exists(Beta)(ドメスティック彼女)'))
 
     def onLabelBtnPressed(self, btn):
         entry = self.app.getEntry('NamingEntry')
-        self.app.setEntry('NamingEntry', entry+btn)
+        self.app.setEntry('NamingEntry', entry + btn)
 
     def onSettingCancelPressed(self):
         self.app.hideSubWindow('Setting')
@@ -529,9 +560,21 @@ class MangaViewer:
         self.app.setMessage('LabelMsg', labelStr)
 
     def updateIntroMsg(self, intro):
-        self.app.setMessage('IntroMsg', intro)
+        self.rrFrameHeight = self.app.getFrameWidget('RR').winfo_height()
+        lineCnt = int((self.conf['manga_max_height'] - self.rrFrameHeight - 20) / 1.25 / 13)
+        # print(self.rrFrameHeight, lineCnt)
+        w = 35
+        t = self.textWrap(intro, width=w, lineCnt=lineCnt)
+        if t.endswith('...'):
+            t = self.textWrap(intro, width=w, lineCnt=lineCnt - 1)
+            self.app.showLink('More..')
+        else:
+            self.app.hideLink('More..')
+        self.app.setMessage('IntroMsg', t)
 
     def loadMangaDir(self):
+        self.app.setToolbarButtonEnabled("MD-fast-backward-alt")
+        self.app.setToolbarButtonEnabled("MD-fast-forward-alt")
         self.app.setToolbarButtonEnabled("ZOOM-IN")
         self.app.setToolbarButtonEnabled("ZOOM-OUT")
         self.app.setToolbarButtonEnabled("REFRESH")
@@ -546,7 +589,9 @@ class MangaViewer:
 
         # Load the first image of this chapter
         self.currPage = 0
-        self.mangaList = self.mangaMeta['manga_images']
+        self.mangaList = self.mangaMeta['manga_images_no_credit'] \
+            if 'manga_images_no_credit' in self.mangaMeta and self.getSetting('ignore_credit') \
+            else self.mangaMeta['manga_images']
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][0])) \
             if len(self.mangaMeta['manga_images']) > 0 else \
             self.app.warningBox('Warning', 'No Manga Image Found.')
@@ -562,7 +607,7 @@ class MangaViewer:
                               (self.app.translate("ChapterSB", default="Chapter: "),
                                self.mangaMeta['current_chapter'], self.mangaMeta['total_chapters']), 0)
         self.app.setStatusbar('%s 1 / %d' % (self.app.translate("PageSB", "Page: "),
-                                             len(self.mangaMeta['manga_images'])), 1)
+                                             len(self.mangaList)), 1)
         try:
             updatedAt = self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['updatedAt']
             updatedAtStr = datetime.utcfromtimestamp(updatedAt).strftime('%Y-%m-%d %H:%M:%S')
@@ -570,7 +615,7 @@ class MangaViewer:
             updatedAtStr = 'N/A'
         self.app.setStatusbar('%s %s' % (self.app.translate("Updated atSB", "Updated at: "),
                                          updatedAtStr), 2)
-        self.app.debug("User %s, has accessed the app from %s", '1', '2')
+        self.onReloadMetaPressed()
 
     def updateMangaImage(self, filepath):
         picImageData = self.readImage(filepath)
@@ -603,13 +648,71 @@ class MangaViewer:
         self.updateIntroMsg(metaObj['description'])
         return True
 
-    def loadNextManga(self):
-        if self.currPage == len(self.mangaList) - 1:
+    def loadFullIntro(self):
+        self.app.infoBox('Introduction', self.mangaMeta['description'])
+
+    def loadNextChapter(self):
+        metaObj = self.mangaMeta
+        if metaObj is None:
             return
+        if metaObj['current_chapter'] == metaObj['total_chapters']:
+            self.app.infoBox('Message', self.translate('LastChapterMsg', 'Already at the last chapter'))
+            return
+
+        dm = DataManager(os.path.join(self.getSetting('auto_download_dir'), 'data.db'))
+        oid = metaObj['chapters'][metaObj['current_chapter']]['oid']
+        chapterId = int(oid[oid.rfind('-') + 1:])
+        chapter = dm.selectChapterByChapterId(chapterId)
+        if chapter is None:
+            self.downloadMangaURL = \
+                'https://mangarock.com/manga/%s/chapter/%s' \
+                % (metaObj['oid'],
+                   metaObj['chapters'][metaObj['current_chapter']]['oid'])
+            self.openDownloadWindow()
+        else:
+            self.mangaPath = chapter.getDirectory()
+            self.loadMangaDir()
+
+    def loadPrevChapter(self):
+        metaObj = self.mangaMeta
+        if metaObj is None:
+            return
+        if metaObj['current_chapter'] == 1:
+            self.app.infoBox('Message', self.translate('LastChapterMsg', 'Already at the first chapter'))
+            return
+
+        dm = DataManager(os.path.join(self.getSetting('auto_download_dir'), 'data.db'))
+        oid = metaObj['chapters'][metaObj['current_chapter'] - 2]['oid']
+        chapterId = int(oid[oid.rfind('-') + 1:])
+        chapter = dm.selectChapterByChapterId(chapterId)
+        if chapter is None:
+            self.downloadMangaURL = \
+                'https://mangarock.com/manga/%s/chapter/%s' \
+                % (metaObj['oid'], oid)
+            self.openDownloadWindow()
+        else:
+            self.mangaPath = chapter.getDirectory()
+            self.loadMangaDir()
+
+    def loadNextManga(self):
+        # print(self.currPage, len(self.mangaList), self.mangaList)
+        if self.currPage == len(self.mangaList) - 1:
+            if self.mangaMeta['current_chapter'] == self.mangaMeta['total_chapters']:
+                # Already at the last page of manga
+                self.app.infoBox('MangaRock Viewer','Already reach the last chapter. Thanks for your watching!')
+            else:
+                r = self.app.yesNoBox('MangaRock Viewer',
+                              'End of chapter: %s\n'
+                              'Would you want to load the next chapter?\n'
+                              'Next chapter: %s' % (self.mangaMeta['chapters'][self.mangaMeta['current_chapter']-1]['name'],
+                                                    self.mangaMeta['chapters'][self.mangaMeta['current_chapter']]['name']))
+                if r:
+                    self.loadNextChapter()
+                return
         self.currPage += 1
-        self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+        self.updateMangaImage(os.path.join(self.mangaPath, self.mangaList[self.currPage]))
         self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
-                                              len(self.mangaMeta['manga_images'])), 1)
+                                              len(self.mangaList)), 1)
         self.app.setToolbarButtonEnabled("MD-PREVIOUS")
         if self.currPage == len(self.mangaList) - 1:
             self.app.setToolbarButtonDisabled("MD-NEXT")
@@ -620,9 +723,9 @@ class MangaViewer:
         if self.currPage == 0:
             return
         self.currPage -= 1
-        self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
+        self.updateMangaImage(os.path.join(self.mangaPath, self.mangaList[self.currPage]))
         self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
-                                              len(self.mangaMeta['manga_images'])), 1)
+                                              len(self.mangaList)), 1)
         self.app.setToolbarButtonEnabled("MD-NEXT")
         if self.currPage == 0:
             self.app.setToolbarButtonDisabled("MD-PREVIOUS")
@@ -644,7 +747,7 @@ class MangaViewer:
         self.currPage = page - 1
         self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
         self.app.setStatusbar('%s %d / %d' % (self.app.translate("PageSB", "Page: "), self.currPage + 1,
-                                              len(self.mangaMeta['manga_images'])), 1)
+                                              len(self.mangaList)), 1)
 
         if self.currPage == 0:
             self.app.setToolbarButtonDisabled("MD-PREVIOUS")
@@ -670,6 +773,8 @@ class MangaViewer:
         self.app.setEntry('NamingEntry', self.getSetting('auto_download_naming'))
 
     def openDownloadWindow(self):
+        if self.downloadMangaURL is not None:
+            self.app.setEntry('MangaURLEntry', self.downloadMangaURL)
         if self.getSetting('auto_download'):
             self.app.setCheckBox('AutoDownloadCB', ticked=True)
             self.app.setLabelState('DirectoryL', 'disabled')
@@ -677,11 +782,14 @@ class MangaViewer:
             self.app.setEntryState('DirectoryEntry', 'disabled')
         else:
             self.app.setCheckBox('AutoDownloadCB', ticked=False)
-            self.app.setLabelState('')
+            # self.app.setLabelState('')
             self.app.setLabelState('DirectoryL', 'normal')
             self.app.setCheckBoxState('AutoDownloadCB', 'disabled')
             self.app.setEntryState('DirectoryEntry', 'normal')
-        self.app.showSubWindow('Download')
+        if self.downloadMangaURL is not None and self.getSetting('auto_download'):
+            self.onDownloadOkPressed('DownloadOk')
+        else:
+            self.app.showSubWindow('Download')
 
     def onAutoDownloadDirChanged(self, event):
         if self.app.getCheckBox('AutoDownloadCB'):
@@ -695,6 +803,13 @@ class MangaViewer:
 
     def generateAutoDownloadDir(self):
         dirFormat = self.getSetting('auto_download_naming')
+        if '%JPMangaName%' in dirFormat:
+            mn = MangaName()
+            nameList = [self.mangaMeta['name']] + self.mangaMeta['alias']
+            print([self.mangaMeta['name']], self.mangaMeta['alias'], nameList)
+            s, r = mn.checkJPCN(nameList)
+            print(s, r)
+            dirFormat = dirFormat.replace('%JPMangaName%', r)
         dirFormat = dirFormat.replace('%MangaName%', self.mangaMeta['name'])
         dirFormat = dirFormat.replace('%Order%', str(self.mangaMeta['current_chapter']))
         dirFormat = dirFormat.replace('%ChapterTitle%',
@@ -704,7 +819,7 @@ class MangaViewer:
         return dirFormat
 
     def onReloadMetaPressed(self):
-        if self.mangaMeta is None or len(self.mangaList) == 0:
+        if self.mangaMeta is None:
             return
         chapterId = self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['oid']
         chapterId = chapterId[chapterId.rfind('-') + 1:]
@@ -721,7 +836,11 @@ class MangaViewer:
         self.mriProgress.set(0)
         self.webpProgress.set(0)
         self.pngProgress.set(0)
-        url = self.app.getEntry('MangaURLEntry').strip()
+        if self.downloadMangaURL is None:
+            url = self.app.getEntry('MangaURLEntry').strip()
+        else:
+            url = self.downloadMangaURL.strip()
+            self.downloadMangaURL = None
         if len(url) == 0:
             self.app.errorBox('Error', 'URL cannot be empty')
             return
@@ -739,6 +858,12 @@ class MangaViewer:
         self.downloadParam = {'url': url, 'chapterId': chapterId,
                               'seriesId': seriesId, 'directory': directory}
         # mr.getComicByChapter(chapterId, directory)
+        self.app.setMessage('DPDownloadMsg0', self.app.translate('DPDownloadMsg0','Start downloading...'))
+        self.app.setMessage('DPDownloadMsg1', self.app.translate('DPDownloadMsg1', 'Preprocessing...'))
+        self.app.setMessage('DPDownloadMsg2', self.app.translate('DPDownloadMsg2', 'Meta data: --'))
+        self.app.setMessage('DPDownloadMsg3', '')
+        self.app.setMessage('DPDownloadMsg4', '')
+        self.app.setMessage('DPDownloadMsg5', '')
         self.app.hideSubWindow('Download')
         self.app.showSubWindow('DownloadProgress')
 
@@ -882,8 +1007,8 @@ class MangaViewer:
         current_time = int(time.time())
         dm = DataManager(os.path.join(self.getSetting('auto_download_dir'), 'data.db'))
         chapter = Chapter(None, int(chapterId), int(seriesId), directory, current_time,
-                          current_time, metaObj['chapters'][metaObj['current_chapter']]['name'],
-                          metaObj['chapters'][metaObj['current_chapter']]['updatedAt'])
+                          current_time, metaObj['chapters'][metaObj['current_chapter'] - 1]['name'],
+                          metaObj['chapters'][metaObj['current_chapter'] - 1]['updatedAt'])
         series = Series(None, seriesId, current_time, json.dumps(metaObj, ensure_ascii=False))
         if self.isDownloading and dm.selectChapterByChapterId(chapterId) is None:
             # Insert to database
@@ -907,6 +1032,11 @@ class MangaViewer:
 
         mr = MangaRock()
         metaObj = mr.getSeriesInfo(seriesId)
+        if metaObj is None:
+            self.app.queueFunction(self.app.setStatusbar,
+                                   self.app.translate('RefreshMetaMsg') + self.app.translate('FailedMsg'),
+                                   5)
+            return
 
         isValid = False
         for i, info in enumerate(metaObj['chapters']):
@@ -923,9 +1053,11 @@ class MangaViewer:
                                                 'Meta data: Invalid URL, this series does not have specific chapter.'))
             return
 
-        mriList = mr.getMRIListByChapter(chapterId)
+        mriList, mriListNoCredit = mr.getMRIListByChapter(chapterId)
         metaObj['manga_images'] = ['ch' + str(chapterId) + '_' + str(i + 1) + '.png'
                                    for i in range(len(mriList))]
+        metaObj['manga_images_no_credit'] = ['ch' + str(chapterId) + '_' + str(i + 1) + '.png'
+                                             for i in range(len(mriListNoCredit))]
         self.setDPMsg(2, self.app.translate('MetaDoneMsg',
                                             'Meta data: Get chapter data, Done'))
 
@@ -939,6 +1071,7 @@ class MangaViewer:
             self.app.queueFunction(self.app.setStatusbar,
                                    self.app.translate('RefreshMetaMsg') + self.app.translate('DoneMsg'),
                                    5)
+            self.mangaMeta = metaObj
             self.loadMangaMeta()
 
         if self.getSetting('auto_download'):
@@ -1088,6 +1221,8 @@ class MangaViewer:
             self.updateMangaImage(os.path.join(self.mangaPath, self.mangaMeta['manga_images'][self.currPage]))
         else:
             self.updateMangaImage('./intro.png')
+        if self.mangaMeta is not None:
+            self.updateIntroMsg(self.mangaMeta['description'])
 
     def onSettingUpdateBtnPressed(self, btn):
         self.language = self.app.getRadioButton('lang')
@@ -1106,6 +1241,21 @@ class MangaViewer:
         self.changeLanguage(self.language)
         if self.mangaMeta is not None:
             self.loadMangaMeta()
+
+    def textWrap(self, text, width=70, lineCnt=None):
+        s = ''
+        i = 0
+        for line in text.split('\n'):
+            for t in textwrap.wrap(line, width=width):
+                if lineCnt is not None and i >= lineCnt:
+                    s = s[:-1] + '...\n'
+                    break
+                i += 1
+                s += t + '\n'
+            if len(line) > 0:
+                i += 1
+                s += '\n'
+        return s.strip()
 
 
 if __name__ == '__main__':

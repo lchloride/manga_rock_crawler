@@ -1,1 +1,7 @@
-{"lang": "ENGLISH", "auto_download": false, "auto_download_dir": "./manga", "auto_download_naming": "%MangaName%_%Order%"}
+{
+  "lang": "ENGLISH",
+  "auto_download": true,
+  "auto_download_dir": "./manga",
+  "auto_download_naming": "%JPMangaName%_%Order%",
+  "ignore_credit": true
+}
