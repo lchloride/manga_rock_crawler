@@ -1,14 +1,14 @@
+import io
+import shutil
 from appJar import gui
 from PIL import Image, ImageTk
 from datetime import datetime
-import json
-import os
-import time
-import codecs
 from main import *
 from data import *
 from multiprocessing import Queue
 import textwrap
+import queue
+import uuid
 
 
 class AtomicInt:
@@ -38,11 +38,116 @@ class AtomicInt:
         return self.add(-1)
 
 
+class ImgDownloadThread(threading.Thread):
+    def __init__(self, threadID, inQueue, outQueue, gui=None):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = 'IMG_DOWNLOAD_THREAD' + str(threadID)
+        self.inQueue = inQueue
+        self.outQueue = outQueue
+        self.gui = gui
+        self.stopFlag = False
+
+    def run(self):
+        # print("Starting " + self.name)
+        with rs.Session() as s:
+            while not self.stopFlag and not self.inQueue.empty():
+                (url, filepath) = self.inQueue.get()
+                data = self.downloadImageNew2(url, filepath, s)
+                self.outQueue.put((url, data))
+
+        # while self.stopFlag and not self.inQueue.empty():
+        #     self.inQueue.get()
+
+        print("Exiting " + self.name)
+
+    def stop(self):
+        # Note that if one thread received STOP sign, all undone tasks will be removed from jobQueue
+        # Thus, this operation will stop other activated threads
+        self.stopFlag = True
+
+    def downloadImage(self, url, filepath=None, session=None):
+        print('Fetch image...,', url, '->', filepath)
+        if session is None:
+            s = rs.Session()
+        else:
+            s = session
+        r = s.get(url, stream=True, timeout=5)
+
+        if filepath is None:
+            filepath = url[url.rfind('/') + 1:]
+
+        with open(filepath, "wb") as pdf:
+            for chunk in r.iter_content(chunk_size=1024):
+
+                # writing one chunk at a time to pdf file
+                if chunk:
+                    pdf.write(chunk)
+        print('Done. Image at', filepath, '\n')
+
+    def downloadImageNew(self, url, filepath=None, session=None):
+        print('Fetch image...,', url, '->', filepath)
+        if session is None:
+            s = rs.Session()
+        else:
+            s = session
+        if filepath is None:
+            filepath = url.split('/')[-1]
+        cnt = 0
+        while cnt < 3:
+            try:
+                r = s.get(url, stream=True, timeout=5)
+                with open(filepath, 'wb') as f:
+                    shutil.copyfileobj(r.raw, f)
+            except rs.exceptions.ReadTimeout as e:
+                cnt += 1
+            except Exception as e:
+                cnt += 1
+                time.sleep(1)
+            else:
+                break
+        if cnt >= 3:
+            print('SOMETHING WRONG')
+        else:
+            print('Done. Image at', filepath, '\n')
+
+    def downloadImageNew2(self, url, filepath=None, session=None):
+        print('Fetch image...,', url, '->', filepath)
+        if session is None:
+            s = rs.Session()
+        else:
+            s = session
+        if filepath is None:
+            filepath = url.split('/')[-1]
+        cnt = 0
+        r = None
+        while cnt < 3:
+            try:
+                r = s.get(url, timeout=5)
+            except rs.exceptions.ReadTimeout as e:
+                cnt += 1
+            except Exception as e:
+                cnt += 1
+                time.sleep(1)
+            else:
+                break
+        if cnt >= 3:
+            print('SOMETHING WRONG')
+        else:
+            print('Done. Image at', filepath, '\n')
+        if r is not None:
+            return r.content
+        else:
+            return None
+
+
 class MangaViewer:
     def __init__(self, language="ENGLISH"):
         self.conf = {'width': 950, 'height': 740,
                      'manga_max_width': 560, 'manga_max_height': 660,
-                     'manga_bg': 'black', 'info_width': 225,
+                     'block_max_width': 140, 'block_max_height': 210, 'result_width': 140,
+                     'manga_bg': 'black', 'info_width': 225, 'series_info_width': 270,
+                     'blocks_per_page': 12, "chapters_per_page": 25
                      }
         self.app = gui("MangaRock Viewer", "%dx%d" % (self.conf['width'], self.conf['height']))
         self.mangaPath = './'
@@ -67,6 +172,17 @@ class MangaViewer:
         self.threads = []
         self.downloadMangaURL = None
         self.rrFrameHeight = 0
+
+        self.page = 0
+        self.searchInfo = None
+        self.metaInfo = None
+        self.authorInfo = None
+        self.authorFlag = False
+        self.searchFlag = False
+        self.seriesMeta = None
+        self.chapterStart = 0
+        self.timeout = 5
+
         self.readSettings()
         self.initLang()
         self.__setLayout()
@@ -175,12 +291,13 @@ class MangaViewer:
         app.setBg(conf['manga_bg'])
         app.setFg('lightgray')
 
-        tools = ["DOWNLOAD", "OPEN", "REFRESH", "MD-fast-backward-alt", "MD-fast-forward-alt",
+        tools = ["DOWNLOAD", "OPEN", "SEARCH", "REFRESH", "MD-fast-backward-alt", "MD-fast-forward-alt",
                  "MD-PREVIOUS", "MD-NEXT", "MD-REPEAT",
                  "ZOOM-IN", "ZOOM-OUT",
                  "ARROW-1-LEFT", "ARROW-1-RIGHT", "ARROW-1-UP",
                  "ARROW-1-DOWN", "SETTINGS", "HELP", "ABOUT", "OFF"]
-        funcs = [self.openDownloadWindow, self.onOpenToolPressed, self.onReloadMetaPressed,
+        funcs = [self.openDownloadWindow, self.onOpenToolPressed, self.onSearchPressed,
+                 self.onReloadMetaPressed,
                  self.loadPrevChapter, self.loadNextChapter,
                  self.loadPreviousManga, self.loadNextManga, self.jumpMangaPage,
                  self.onZoomInBtnPressed, self.onZoomOutBtnPressed, self.onMoveLeftBtnPressed,
@@ -424,6 +541,7 @@ class MangaViewer:
         app.setButtonWidth('DownloadOk', 6)
         app.stopSubWindow()
 
+        # ======================
         # Setting dialog
         app.startSubWindow("Setting", modal=True)
         app.setFg('black')
@@ -469,6 +587,165 @@ class MangaViewer:
         # app.addNamedButton("Cancel", "SettingCancel", app.hideSubWindow, row=2, column=0)
         # app.addNamedButton("OK", "SettingOk", self.onDownloadOkPressed, row=2, column=1)
         app.stopSubWindow()
+
+        # ===================
+        # Search Subwindow
+        app.startSubWindow(name='Search', title="MangaRock Searcher", modal=True)
+        app.setSticky('news')
+        app.setStretch('COLUMN')
+        app.setPadding([5,2])
+
+        app.setSize(self.conf['width'], self.conf['height'])
+        app.setBg('#dbdbdb')
+        app.setFg('black')
+
+        app.addLabelEntry("Keywords", row=0, column=0, colspan=3)
+        app.addButton("Search", func=self.onSearchClicked, row=0, column=3, colspan=1)
+        app.addLabel('Result', "Started", row=0, column=4, colspan=2)
+        app.addHorizontalSeparator(1, 0, 6, colour="gray")
+
+        for row in range(2):
+            for column in range(6):
+                iid = str(row * 6 + column)
+                app.startFrame("BLOCK_" + iid, row=row + 3, column=column)
+                # app.setBg("#11"+str(row)+str(row)+str(column)+str(column))
+                app.setSticky("NEW")
+                app.setStretch("COLUMN")
+                bg0 = Image.open("bg.png")
+                bg = bg0.resize((self.conf['block_max_width'], self.conf['block_max_height']), Image.ANTIALIAS)
+                bgg = ImageTk.PhotoImage(bg)
+                app.addImageData("pic_" + iid, bgg, fmt="PhotoImage")
+                app.addMessage('Title_' + iid, text="")
+                app.setMessageWidth('Title_' + iid, self.conf['result_width'])
+                app.addLabel('Author_' + iid, text="")
+                app.setLabelWidth('Author_' + iid, self.conf['result_width'])
+                app.addLabel('Info_' + iid, text="")
+                app.setLabelWidth('Info_' + iid, self.conf['result_width'])
+                app.setImageSubmitFunction("pic_" + iid, self.onImageClicked)
+                app.stopFrame()
+
+        app.addHorizontalSeparator(5, 0, 6, colour="gray")
+
+        app.addLabelEntry('Page', column=0)
+        app.addButtons(['JumpToPage', 'FirstPage', 'PrevPage', 'NextPage', 'LastPage'],
+                       [self.onJumpToPageClicked, self.onFirstPageClicked, self.onPrevPageClicked,
+                        self.onNextPageClicked, self.onLastPageClicked],
+                       row=6, column=1, colspan=3)
+
+        app.enableEnter(self.onSearchClicked)
+        app.stopSubWindow()
+        # =======================
+
+        # =======================
+        # Series Subwindow
+        app.startSubWindow(name='Series', title="View Series", modal=True)
+        app.setSize(720, 640)
+        app.setSticky("NW")
+        app.startFrame("SERIES_LEFT", row=0, column=0, rowspan=1, colspan=1)
+
+        app.setSticky("NW")
+        app.setStretch("COLUMN")
+        app.setBg('#dbdbdb')
+        app.setFg('black')
+
+        app.startFrame('SERIES_LL', row=0, column=1)
+        app.setSticky("NW")
+        app.setPadX(2)
+        app.setFont(13)
+
+        app.addLabel('SInfoL', 'Information')
+        app.getLabelWidget("SInfoL").config(font=("Comic Sans", "14", "bold"))
+
+        # Name list
+        aliasList = ["N/A"]
+        app.addLabel('SNameL', 'Name:', row=1, column=0)
+        aliasStr = ''
+        for i, alias in enumerate(aliasList):
+            aliasStr += alias + '\n'
+        aliasStr = aliasStr[:-1]
+        app.addMessage('SNameMsg', aliasStr, row=1, column=1)
+        app.setMessageWidth('SNameMsg', conf['series_info_width'])
+        rowCnt = 2
+
+        # Author
+        author = "N/A"
+        app.addLabel('SAuthorL', 'Author:', row=rowCnt, column=0)
+        app.addMessage('SAuthorMsg', author, row=rowCnt, column=1)
+        app.setMessageWidth('SAuthorMsg', conf['series_info_width'])
+        rowCnt += 1
+
+        # Chapter
+        app.addLabel('SChapterL', 'Total chapter:', row=rowCnt, column=0)
+        app.addMessage('SChapterMsg', 'N/A', row=rowCnt, column=1)
+        app.setMessageWidth('SChapterMsg', conf['series_info_width'])
+        rowCnt += 1
+
+        # State
+        app.addLabel('SStateL', 'State:', row=rowCnt, column=0)
+        app.addMessage('SStateMsg', 'N/A', row=rowCnt, column=1)
+        app.setMessageWidth('SStateMsg', conf['series_info_width'])
+        rowCnt += 1
+
+        # Last updated
+        # lastUpdated = 0
+        # lastUpdatedStr = datetime.utcfromtimestamp(lastUpdated).strftime('%Y-%m-%d %H:%M:%S')
+        app.addLabel('SLastUpdatedL', 'Last Updated:', row=rowCnt, column=0)
+        app.addMessage('SLastUpdatedMsg', 'N/A', row=rowCnt, column=1)
+        app.setMessageWidth('SLastUpdatedMsg', conf['series_info_width'])
+        rowCnt += 1
+
+        # Label
+        labelList = ['N/A']
+        labelStr = ''
+        for l in labelList:
+            labelStr += app.translate(l, '--') + ', '
+        labelStr = labelStr[:-2]
+        app.addLabel('SLabelL', 'Labels:', row=rowCnt, column=0)
+        app.addMessage('SLabelMsg', labelStr, row=rowCnt, column=1)
+        app.setMessageWidth('SLabelMsg', conf['series_info_width'])
+        rowCnt += 1
+
+        app.stopFrame()
+
+        app.startFrame('SERIES_RRB', row=1, column=1)
+        app.setSticky("NW")
+        app.setPadX(2)
+        app.setFont(13)
+
+        # Intro
+        intro = "N/A"
+        app.addLabel('SIntroL', 'Introduction:', row=rowCnt, column=0)
+        app.addMessage('SIntroMsg', intro, row=rowCnt, column=1)
+        rowCnt += 1
+        app.addLink('More...', self.loadFullSIntro, row=rowCnt, column=1)
+        app.hideLink('More...')
+        rowCnt += 1
+
+        # Frame ends
+        app.stopFrame()
+        app.stopFrame()
+
+        # Chpater list frame starts
+        app.startFrame('SERIES_RIGHT', row=0, column=1)
+
+        app.setSticky("NW")
+        app.setStretch('ROW')
+        app.setFg('black')
+
+        app.addLabel("ChapterList", "Chapter List")
+        app.addLabelOptionBox("ChapterStarts", ["N/A"])
+        app.setOptionBoxChangeFunction("ChapterStarts", self.changeChapterStarts)
+        app.startFrame("RRBB")
+        app.setSticky("NW")
+        for i in range(self.conf['chapters_per_page']):
+            app.addLabel("Chapter_" + str(i), "")
+            app.setLabelWidth("Chapter_" + str(i), 42)
+            app.setLabelSubmitFunction("Chapter_" + str(i), self.onChapterClicked)
+        app.stopFrame()
+        app.stopFrame()
+
+        app.stopSubWindow()
+        # ============================
 
         # Bind keys
         app.bindKey("<Left>", self.loadPreviousManga)
@@ -699,13 +976,14 @@ class MangaViewer:
         if self.currPage == len(self.mangaList) - 1:
             if self.mangaMeta['current_chapter'] == self.mangaMeta['total_chapters']:
                 # Already at the last page of manga
-                self.app.infoBox('MangaRock Viewer','Already reach the last chapter. Thanks for your watching!')
+                self.app.infoBox('MangaRock Viewer', 'Already reach the last chapter. Thanks for your watching!')
             else:
                 r = self.app.yesNoBox('MangaRock Viewer',
-                              'End of chapter: %s\n'
-                              'Would you want to load the next chapter?\n'
-                              'Next chapter: %s' % (self.mangaMeta['chapters'][self.mangaMeta['current_chapter']-1]['name'],
-                                                    self.mangaMeta['chapters'][self.mangaMeta['current_chapter']]['name']))
+                                      'End of chapter: %s\n'
+                                      'Would you want to load the next chapter?\n'
+                                      'Next chapter: %s' % (
+                                      self.mangaMeta['chapters'][self.mangaMeta['current_chapter'] - 1]['name'],
+                                      self.mangaMeta['chapters'][self.mangaMeta['current_chapter']]['name']))
                 if r:
                     self.loadNextChapter()
                 return
@@ -858,7 +1136,7 @@ class MangaViewer:
         self.downloadParam = {'url': url, 'chapterId': chapterId,
                               'seriesId': seriesId, 'directory': directory}
         # mr.getComicByChapter(chapterId, directory)
-        self.app.setMessage('DPDownloadMsg0', self.app.translate('DPDownloadMsg0','Start downloading...'))
+        self.app.setMessage('DPDownloadMsg0', self.app.translate('DPDownloadMsg0', 'Start downloading...'))
         self.app.setMessage('DPDownloadMsg1', self.app.translate('DPDownloadMsg1', 'Preprocessing...'))
         self.app.setMessage('DPDownloadMsg2', self.app.translate('DPDownloadMsg2', 'Meta data: --'))
         self.app.setMessage('DPDownloadMsg3', '')
@@ -1256,6 +1534,418 @@ class MangaViewer:
                 i += 1
                 s += '\n'
         return s.strip()
+
+    # =====================
+
+    def loadFullSIntro(self):
+        self.app.infoBox('Introduction', self.seriesMeta['description'])
+
+    def __postConnect(self, url, data, session=None):
+        if session is None:
+            s = rs.Session()
+        else:
+            s = session
+        r = self.__post(url, data=data, session=s)
+        if r is None:
+            return "Cannot establish connnection"
+        elif r.status_code >= 400:
+            return "Failed to get response " + r.text
+        obj = json.loads(r.text)
+        if obj["code"] != 0:
+            return str(obj["data"])
+        else:
+            return obj["data"]
+
+    def onImageClicked(self, iid):
+        idx = int(iid[iid.rfind('_') + 1:])
+        seriesId = self.searchInfo[self.page * self.conf["blocks_per_page"] + idx]
+        self.app.showSubWindow('Series')
+        self.app.threadCallback(self.getSeriesInfo, self.loadSeries, seriesId)
+        # Back to default
+        self.updateSNameMsg('N/A', ['N/A'])
+        self.updateSAuthorMsg('N/A')
+        self.updateSChapterMsg('N/A')
+        self.updateSStateMsg('N/A')
+        labelList = ['N/A']
+        self.updateSLabelMsg(labelList)
+        self.updateSLastUpdatedMsg('N/A')
+        self.updateSIntroMsg('N/A')
+
+        self.app.changeOptionBox('ChapterStarts', ['N/A'])
+        for i in range(self.conf["chapters_per_page"]):
+            self.app.setLabel("Chapter_" + str(i), "")
+
+    def getSeriesInfo(self, seriesId):
+        cnt = 0
+        r = None
+        while cnt < 3:
+            try:
+                r = rs.get('https://api.mangarockhd.com/query/web401/info?oid=%s&last=0&country=Japan'
+                           % str(seriesId), timeout=self.timeout)
+            except rs.exceptions.ReadTimeout as e:
+                cnt += 1
+            except Exception as e:
+                cnt += 1
+                time.sleep(1)
+            else:
+                break
+
+        if r is None or cnt >= 3:
+            return None
+        # print(r.text)
+        obj = json.loads(r.text)
+        if obj['code'] != 0:
+            return None
+        else:
+            obj['data']['mrs_series'] = str(seriesId)
+            return obj['data']
+
+    def loadSeries(self, metaObj):
+        self.seriesMeta = metaObj
+        self.updateSNameMsg(metaObj['name'], metaObj['alias'])
+        self.updateSAuthorMsg(metaObj['author'])
+        self.updateSChapterMsg(metaObj['total_chapters'])
+        self.updateSStateMsg(metaObj['completed'])
+        labelList = []
+        for label in metaObj['rich_categories']:
+            labelList.append(self.app.translate(label['name'], '--'))
+        self.updateSLabelMsg(labelList)
+        self.updateSLastUpdatedMsg(metaObj['last_update'])
+        self.updateSIntroMsg(metaObj['description'])
+
+        newChapterStarts = list(range(1, len(metaObj['chapters']), self.conf["chapters_per_page"]))
+        if len(newChapterStarts) == 0:
+            newChapterStarts = ['N/A']
+        self.app.changeOptionBox('ChapterStarts', newChapterStarts)
+        self.loadChapterList()
+
+    def loadChapterList(self):
+        if self.app.getOptionBox('ChapterStarts') == 'N/A':
+            return
+        self.chapterStart = int(self.app.getOptionBox('ChapterStarts'))
+        # Load chapters from chapterStarts-1 to chapterStarts-1+self.conf["chapters_per_page"]
+        for i in range(min(self.conf["chapters_per_page"],
+                           len(self.seriesMeta['chapters']) - self.chapterStart)):
+            idx = self.chapterStart - 1 + i
+            name = self.seriesMeta['chapters'][idx]['name']
+            if len(name) > 50:
+                name = name[:47] + "..."
+            self.app.setLabel("Chapter_" + str(i), name)
+
+        for i in range(min(self.conf["chapters_per_page"],
+                           len(self.seriesMeta['chapters']) - self.chapterStart), self.conf["chapters_per_page"]):
+            self.app.setLabel("Chapter_" + str(i), "")
+
+    def updateSNameMsg(self, name, aliasList):
+        aliasStr = name + '\n'
+        for i, alias in enumerate(aliasList):
+            if i > 5:
+                break
+            if alias != name:
+                aliasStr += alias.strip() + ';\n'
+        aliasStr = aliasStr[:-1]
+        self.app.setMessage('SNameMsg', aliasStr)
+
+    def updateSAuthorMsg(self, author):
+        self.app.setMessage('SAuthorMsg', author)
+
+    def updateSChapterMsg(self, totalChapter):
+        self.app.setMessage('SChapterMsg', totalChapter)
+
+    def updateSStateMsg(self, isCompleted):
+        self.app.setMessage('SStateMsg',
+                            self.app.translate('CompletedMsg', "Completed")
+                            if isCompleted else self.app.translate('OngoingMsg', "Ongoing"))
+
+    def updateSLastUpdatedMsg(self, lastUpdated):
+        if type(lastUpdated) == int:
+            lastUpdatedStr = datetime.utcfromtimestamp(lastUpdated).strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            lastUpdatedStr = lastUpdated
+        self.app.setMessage('SLastUpdatedMsg', lastUpdatedStr)
+
+    def updateSLabelMsg(self, labelList):
+        labelStr = ''
+        for l in labelList:
+            labelStr += l + ', '
+        labelStr = labelStr[:-2]
+        self.app.setMessage('SLabelMsg', labelStr)
+
+    def updateSIntroMsg(self, intro):
+        lineCnt = 12
+        # print(self.rrFrameHeight, lineCnt)
+        w = 42
+        t = self.textWrap(intro, width=w, lineCnt=lineCnt)
+        if t.endswith('...'):
+            t = self.textWrap(intro, width=w, lineCnt=lineCnt - 1)
+            self.app.showLink('More...')
+        else:
+            self.app.hideLink('More...')
+        self.app.setMessage('SIntroMsg', t)
+
+    def changeChapterStarts(self, ev):
+        self.loadChapterList()
+
+    def getSearchInfo(self, keywords, session=None):
+        return self.__postConnect("https://api.mangarockhd.com/query/web401/mrs_search?country=Japan",
+                                  data=json.dumps({"type": "series", "keywords": str(keywords)}), session=session)
+
+    def getMeta(self, idList, session=None):
+        self.authorInfo = self.__postConnect("https://api.mangarockhd.com/meta?country=Japan",
+                                             data=json.dumps(idList), session=session)
+        return self.authorInfo
+
+    def getMetaThread(self, idList, session=None):
+        self.app.threadCallback(self.getMeta, self.getMetaThreadCallback, idList, session)
+
+    def getMetaThreadCallback(self, ev):
+        metaInfo = self.metaInfo
+        authorMeta = self.authorInfo
+        for key in metaInfo:
+            authorNameList = []
+            for authorId in metaInfo[key]["author_ids"]:
+                authorNameList.append(authorMeta[authorId]["name"])
+            metaInfo[key]['author_names'] = authorNameList
+        self.authorFlag = False
+        print(metaInfo)
+
+    def onSearchClicked(self, btn):
+        if self.searchFlag:
+            self.app.warningBox('MangaRock Searcher', 'A searching process is running')
+            return
+
+        self.searchFlag = True
+        keywords = self.app.getEntry('Keywords')
+        if len(keywords) == 0:
+            self.app.warningBox('MangaRock Searcher', 'Please specify the keywords')
+        self.app.setLabel("Result", "Searching...")
+        self.app.thread(self.search, keywords)
+
+    def search(self, keywords):
+        self.page = 0
+        self.searchInfo = None
+        self.metaInfo = None
+        self.authorInfo = None
+
+        s = rs.Session()
+        searchInfo = self.getSearchInfo(keywords, session=s)
+        if type(searchInfo) == str:
+            self.app.errorBox("MangaRock Searcher", searchInfo)
+            return
+        self.searchInfo = searchInfo
+        self.prepareSearchMeta(s)
+
+    def prepareSearchMeta(self, session=None):
+        self.app.queueFunction(self.app.setLabel, "Result", "Loading results...")
+        searchInfo = self.searchInfo[self.page * self.conf['blocks_per_page']:
+                                     min(len(self.searchInfo), (self.page + 1) * self.conf['blocks_per_page'])]
+        metaInfo = self.getMeta(searchInfo)
+        self.metaInfo = metaInfo
+
+        if type(searchInfo) == str:
+            self.app.errorBox("MangaRock Searcher", metaInfo)
+            return
+        # Prepare author query
+        authorList = []
+        for key in metaInfo:
+            authorList.extend(metaInfo[key]["author_ids"])
+
+        # Prepare image query
+        imgThreads = []
+        imgQueue = queue.Queue()
+        for i, key in enumerate(metaInfo):
+            info = metaInfo[key]
+            postfix = info['thumbnail'][info['thumbnail'].rfind('.'):]
+            filename = str(uuid.uuid4()) + postfix
+            imgQueue.put((info["thumbnail"],
+                          os.path.join(".", "temp", filename),
+                          ))
+            info['filename'] = filename
+
+        # Start img threads
+        imgDataQueue = queue.Queue()
+        for i in range(min(max(1, len(metaInfo) // 3), 6)):
+            # for i in range(len(metaInfo)):
+            imgThread = ImgDownloadThread(i, imgQueue, imgDataQueue)
+            imgThreads.append(imgThread)
+            imgThread.start()
+            time.sleep(0.5)
+
+        # Start author info thread
+        self.authorFlag = True
+        self.getMetaThread(authorList, session=session)
+
+        for imgThread in imgThreads:
+            imgThread.join()
+        print("All tasks done.")
+
+        imgData = {}
+        while not imgDataQueue.empty():
+            (url, data) = imgDataQueue.get()
+            imgData[url] = data
+
+        while self.authorFlag:
+            time.sleep(1)
+
+        self.displaySearch(imgData)
+
+    def displaySearch(self, imgData):
+        searchInfo = self.searchInfo[self.page * self.conf['blocks_per_page']:
+                                     min(len(self.searchInfo), (self.page + 1) * self.conf['blocks_per_page'])]
+
+        for i, key in enumerate(searchInfo):
+            info = self.metaInfo[key]
+            self.app.queueFunction(self.loadResultItem, info, i, imgData[info['thumbnail']])
+
+        for i in range(len(self.metaInfo), 12):
+            self.app.queueFunction(self.loadEmptyItem, i)
+
+        self.app.setEntry('Page', self.page)
+        if len(self.metaInfo) == 0:
+            resultStr = 'No result found.'
+        else:
+            resultStr = "Found %d items, Page %d of %d" \
+                        % (len(self.searchInfo), self.page + 1, math.ceil(len(self.searchInfo) / 12))
+        self.app.setLabel('Result', resultStr)
+        self.changePageButtonsState()
+        self.searchFlag = False
+
+    def loadResultItem(self, info, i, data):
+        title = info['name']
+        if len(title) > 50:
+            title = title[:47] + "..."
+        if data is None:
+            img0 = Image.open(os.path.join('.', 'bg.png'))
+            img = img0.resize((self.conf['block_max_width'], self.conf['block_max_height']), Image.ANTIALIAS)
+            imgg = ImageTk.PhotoImage(img)
+            self.app.queueFunction(self.app.setImageData, "pic_" + str(i), imgg, fmt="PhotoImage")
+        else:
+            try:
+                # img0 = Image.open(os.path.join('.', 'temp', filename))
+                img0 = Image.open(io.BytesIO(data))
+                img = img0.resize((self.conf['block_max_width'], self.conf['block_max_height']), Image.ANTIALIAS)
+                imgg = ImageTk.PhotoImage(img)
+                self.app.queueFunction(self.app.setImageData, "pic_" + str(i), imgg, fmt="PhotoImage")
+            except Exception as e:
+                print('Cannot load image')
+        self.app.queueFunction(self.app.setMessage, 'Title_' + str(i), text=title)
+        authorStr = ""
+        for name in info['author_names']:
+            authorStr += name + ","
+        authorStr = authorStr[:-1]
+        self.app.queueFunction(self.app.setLabel, 'Author_' + str(i), text=authorStr)
+        self.app.queueFunction(self.app.setLabel, 'Info_' + str(i),
+                               text="Completed" if info['completed'] else "Ongoing")
+
+    def loadEmptyItem(self, i):
+        img0 = Image.open(os.path.join('.', 'bg.png'))
+        img = img0.resize((self.conf['block_max_width'], self.conf['block_max_height']), Image.ANTIALIAS)
+        imgg = ImageTk.PhotoImage(img)
+        self.app.queueFunction(self.app.setImageData, "pic_" + str(i), imgg, fmt="PhotoImage")
+        self.app.queueFunction(self.app.setMessage, 'Title_' + str(i), text='')
+        self.app.queueFunction(self.app.setLabel, 'Author_' + str(i), text='')
+        self.app.queueFunction(self.app.setLabel, 'Info_' + str(i), text='')
+
+    def loadPageItems(self):
+        if self.searchFlag:
+            self.app.warningBox('MangaRock Searcher', 'A searching process is running')
+            return
+
+        self.searchFlag = True
+        s = rs.Session()
+        self.prepareSearchMeta(s)
+
+    def changePageButtonsState(self):
+        if self.page <= 0:
+            self.app.setButtonState('PrevPage', 'disabled')
+        else:
+            self.app.setButtonState('PrevPage', 'active')
+
+        if self.page >= math.ceil(len(self.searchInfo) / self.conf['blocks_per_page']) - 1:
+            self.app.setButtonState('NextPage', 'disabled')
+        else:
+            self.app.setButtonState('NextPage', 'active')
+
+    def onNextPageClicked(self):
+        if self.page < math.ceil(len(self.searchInfo) / self.conf['blocks_per_page']) - 1:
+            self.page += 1
+            self.app.thread(self.loadPageItems)
+        self.changePageButtonsState()
+
+    def onPrevPageClicked(self):
+        if self.page > 0:
+            self.page -= 1
+            self.app.thread(self.loadPageItems)
+        self.changePageButtonsState()
+
+    def onLastPageClicked(self):
+        self.page = math.ceil(len(self.searchInfo) / self.conf['blocks_per_page']) - 1
+        self.app.thread(self.loadPageItems)
+        self.changePageButtonsState()
+
+    def onFirstPageClicked(self):
+        self.page = 0
+        self.app.thread(self.loadPageItems)
+        self.changePageButtonsState()
+
+    def onJumpToPageClicked(self):
+        page = self.app.getEntry("Page")
+        if type(page) != int:
+            self.app.errorBox("MangaRock Searcher", "Please type an integer!")
+        elif 0 <= page - 1 <= math.ceil(len(self.searchInfo) / self.conf["blocks_per_page"]) - 1:
+            self.page = page
+            self.app.thread(self.loadPageItems)
+            self.changePageButtonsState()
+        else:
+            self.app.errorBox("MangaRock Searcher", "Please type an integer in 1~%d"
+                              % (math.ceil(len(self.searchInfo) / self.conf["blocks_per_page"]) - 1))
+
+    def __createTempDB(self):
+        sql = """﻿CREATE TABLE "tempfile" (
+            "url"	TEXT NOT NULL,
+            "filename"	TEXT NOT NULL,
+            "create_time"	INTEGER NOT NULL,
+            "last_modified_time"	INTEGER NOT NULL,
+            "size"	INTEGER NOT NULL,
+            "attrs"	TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY("url")
+        );"""
+        c = self.conn.cursor()
+        # Create table
+        c.execute(sql)
+        self.conn.commit()
+
+    def __post(self, url, data, tryTimes=3, session=None):
+        cnt = 0
+        if session is not None and type(session) == rs.Session:
+            s = session
+        else:
+            s = rs.Session()
+        r = None
+        while cnt < tryTimes:
+            try:
+                r = s.post(url, data=data, timeout=self.timeout)
+            except Exception as e:
+                cnt += 1
+                time.sleep(1)
+            else:
+                break
+        if cnt >= tryTimes:
+            return None
+        else:
+            return r
+
+    def onSearchPressed(self, ev):
+        self.app.showSubWindow('Search')
+
+    def onChapterClicked(self, btn):
+        idx = int(btn[btn.rfind('_')+1:])
+        obj = self.seriesMeta['chapters'][self.chapterStart + idx]
+        url = 'https://mangarock.com/manga/%s/chapter/%s' % (self.seriesMeta['oid'], obj['oid'])
+        self.app.setEntry('MangaURLEntry', url)
+        self.app.hideSubWindow('Search')
+        self.app.hideSubWindow('Series')
+        self.app.showSubWindow('Download')
 
 
 if __name__ == '__main__':

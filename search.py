@@ -119,18 +119,17 @@ class ImgDownloadThread(threading.Thread):
 
 
 class MangaSearcher:
-    def __init__(self, parent=None, language="ENGLISH"):
-        self.parent = parent
+    def __init__(self, language="ENGLISH"):
         self.conf = {'width': 950, 'height': 740,
                      'block_max_width': 140, 'block_max_height': 210,
                      'manga_bg': '#dbdbdb', 'result_width': 140, 'info_width': 270,
                      'blocks_per_page': 12, "chapters_per_page": 25
                      }
         self.app = gui("MangaRock Searcher", "%dx%d" % (self.conf['width'], self.conf['height']))
-        self.tempPath = os.path.join(".", "temp")
-        if not os.path.isdir(self.tempPath):
-            os.mkdir(self.tempPath)
-        self.conn = sqlite3.connect('data.db')
+        # self.tempPath = os.path.join(".", "temp")
+        # if not os.path.isdir(self.tempPath):
+        #     os.mkdir(self.tempPath)
+        # self.conn = sqlite3.connect('data.db')
         self.page = 0
         self.searchInfo = None
         self.metaInfo = None
@@ -154,7 +153,6 @@ class MangaSearcher:
 
         # Set stop function
         def checkStop():
-            self.conn.close()
             return True
 
         app.setStopFunction(checkStop)
@@ -196,7 +194,7 @@ class MangaSearcher:
 
         app.enableEnter(self.onSearchClicked)
 
-        # Show Series Subwindow
+        # Series Subwindow
         app.startSubWindow(name='Series', title="View Series", modal=True)
         app.setSize(720, 640)
         app.setSticky("NW")
