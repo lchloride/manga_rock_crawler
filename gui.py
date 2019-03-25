@@ -1381,9 +1381,12 @@ class MangaViewer:
             return
 
         # If directory is not None, auto-downloading is not used
+        # However, auto-downloading directory may be not created
         # Create directory if not exists
         if directory is not None:
             self.createDir(directory)
+        else:
+            self.createDir(self.getSetting('auto_download_dir'))
 
         if not self.isDownloading:
             return
@@ -1945,7 +1948,7 @@ class MangaViewer:
         self.app.setEntry('MangaURLEntry', url)
         self.app.hideSubWindow('Search')
         self.app.hideSubWindow('Series')
-        self.app.showSubWindow('Download')
+        self.openDownloadWindow()
 
 
 if __name__ == '__main__':

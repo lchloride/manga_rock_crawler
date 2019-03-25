@@ -115,6 +115,7 @@ class DataManager:
     def __init__(self, db_name):
         self.conn = sqlite3.connect(db_name)
         self.cursor = self.conn.cursor()
+        self.createDatabase()
 
     def submit(self):
         self.conn.commit()
@@ -122,28 +123,42 @@ class DataManager:
     def close(self):
         self.conn.close()
 
+    def checkTableExists(self, tableName):
+        stmt = '''SELECT name FROM sqlite_master WHERE type='table' AND name=?'''
+        self.cursor.execute(stmt, (tableName, ))
+        row = self.cursor.fetchone()
+        if row is not None and len(row) > 0:
+            return True
+        else:
+            return False
+
     def createDatabase(self):
-        self.createTableChapter()
-        self.createTableSeries()
+        print(self.checkTableExists('chapter'))
+        if not self.checkTableExists('chapter'):
+            self.createTableChapter()
+        if not self.checkTableExists('series'):
+            self.createTableSeries()
         self.submit()
 
     def createTableChapter(self):
-        stmt = '''﻿CREATE TABLE "chapter" (
+        stmt = '''CREATE TABLE "chapter" (
             "id"	INTEGER PRIMARY KEY AUTOINCREMENT,
             "chapterid"	INTEGER UNIQUE,
             "seriesid"	INTEGER NOT NULL,
             "directory"	TEXT,
             "create_time"	INTEGER,
-            "update_time"	INTEGER
+            "update_time"	INTEGER,
+            "name"	TEXT NOT NULL,
+            "publish_time"	INTEGER NOT NULL
         )'''
         self.cursor.execute(stmt)
 
     def createTableSeries(self):
-        stmt = '''﻿CREATE TABLE "series" (
-                "id"	INTEGER PRIMARY KEY AUTOINCREMENT,
-                "seriesid"	INTEGER NOT NULL UNIQUE,
-                "update_time"	INTEGER NOT NULL,
-                "meta"	TEXT NOT NULL
+        stmt = '''CREATE TABLE `series` (
+                `id`	INTEGER PRIMARY KEY AUTOINCREMENT,
+                `seriesid`	INTEGER NOT NULL UNIQUE,
+                `update_time`	INTEGER NOT NULL,
+                `meta`	TEXT NOT NULL
             )'''
         self.cursor.execute(stmt)
 
@@ -197,5 +212,5 @@ class DataManager:
 
 
 if __name__ == '__main__':
-    dm = DataManager('./manga/data.db')
-    print(dm.selectChapterByChapterId(61794))
+    dm = DataManager('./manga1/data.db')
+
